@@ -19,7 +19,6 @@ import {
   Camera, 
   FileText, 
   CheckCircle2, 
-  Clock, 
   Plus, 
   Search, 
   Sparkles, 
@@ -28,7 +27,6 @@ import {
   Building2, 
   Warehouse,
   RefreshCw,
-  Shield,
   Lock,
   Users,
   Brain,
@@ -40,7 +38,7 @@ import {
 } from 'lucide-react';
 
 // ============================================================================
-// 1. CONFIGURAÇÃO DIRETA DO SEU FIREBASE E CHAVE DA IA (GEMINI)
+// 1. CONFIGURAÇÃO DO SEU FIREBASE (PROJETO: controle-nf-fazenda)
 // ============================================================================
 const firebaseConfig = {
   apiKey: "AIzaSyAh06a2MfQIfzTRrLBfqgDz3xpwENBofnI",
@@ -51,15 +49,13 @@ const firebaseConfig = {
   appId: "1:741939918041:web:ac156055f62da1495bfac8"
 };
 
-const GEMINI_API_KEY = "";
-
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = "controle-nf-fazenda-prod";
 
 // ============================================================================
-// 2. PERFIS E SENHAS PADRÃO INICIAIS
+// 2. PERFIS E SENHAS PADRÃO
 // ============================================================================
 const ROLES_CONFIG = {
   compras: { label: 'Compras', defaultPin: '1236', canDispatch: true, canConfirmAlmox: false, canConfirmOffice: true, isAdmin: false },
@@ -86,6 +82,28 @@ const SETORES_FAZENDA = [
   'Administrativo / Sede'
 ];
 
+// Função auxiliar para comprimir imagem antes de enviar à IA (evita erro de tamanho no 4G)
+const compressImageDataUrl = (dataUrl, maxWidth = 1400) => {
+  return new Promise((resolve) => {
+    if (!dataUrl.startsWith('data:image/')) {
+      resolve(dataUrl);
+      return;
+    }
+    const img = new Image();
+    img.onload = () => {
+      const scale = img.width > maxWidth ? maxWidth / img.width : 1;
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL('image/jpeg', 0.82));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+};
+
 export default function App() {
   const [fbUser, setFbUser] = useState(null);
   const [remessas, setRemessas] = useState([]);
@@ -97,7 +115,6 @@ export default function App() {
   });
   const [loading, setLoading] = useState(true);
 
-  // Autenticação de Perfil com Senha
   const [loggedUser, setLoggedUser] = useState(() => {
     try {
       const saved = localStorage.getItem('nf_logged_user');
@@ -110,7 +127,6 @@ export default function App() {
   const [loginPinInput, setLoginPinInput] = useState('');
   const [loginError, setLoginError] = useState('');
 
-  // Estados de Tela e Modais
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -120,7 +136,6 @@ export default function App() {
   const [usersModalOpen, setUsersModalOpen] = useState(false);
   const [neuralModalOpen, setNeuralModalOpen] = useState(false);
 
-  // Câmera Vertical
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraError, setCameraError] = useState('');
@@ -128,17 +143,15 @@ export default function App() {
   const mediaStreamRef = useRef(null);
   const galleryInputRef = useRef(null);
 
-  // Leitura IA e Notificações
   const [isScanning, setIsScanning] = useState(false);
   const [scanMessage, setScanMessage] = useState('');
+  const [lastAiError, setLastAiError] = useState('');
   const [neuralSuggestionBanner, setNeuralSuggestionBanner] = useState('');
   const [toast, setToast] = useState(null);
 
-  // Filtros
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('TODOS');
 
-  // Formulário da Nota Fiscal
   const todayStr = new Date().toISOString().split('T')[0];
   const [formData, setFormData] = useState({
     numeroNF: '',
@@ -163,7 +176,6 @@ export default function App() {
     anexoPreview: ''
   });
 
-  // Confirmações
   const [almoxConfirmData, setAlmoxConfirmData] = useState({
     dataRecebimentoAlmox: todayStr,
     recebidoPorAlmox: '',
@@ -176,7 +188,6 @@ export default function App() {
     observacoes: ''
   });
 
-  // Novo Usuário
   const [newUserForm, setNewUserForm] = useState({
     name: '',
     role: 'compras',
@@ -185,16 +196,14 @@ export default function App() {
 
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
-    setTimeout(() => setToast(null), 3500);
+    setTimeout(() => setToast(null), 4500);
   };
 
-  // Permissão Atual
   const currentPermissions = useMemo(() => {
     if (!loggedUser) return ROLES_CONFIG.compras;
     return ROLES_CONFIG[loggedUser.role] || ROLES_CONFIG.compras;
   }, [loggedUser]);
 
-  // 1. Login Firebase Anônimo
   useEffect(() => {
     const initAuth = async () => {
       try {
@@ -212,7 +221,6 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  // 2. Sincronizar Remessas, Usuários e Memória Neural
   useEffect(() => {
     if (!fbUser) return;
 
@@ -253,7 +261,6 @@ export default function App() {
     };
   }, [fbUser]);
 
-  // Tela Cheia
   const toggleFullScreen = () => {
     if (!document.fullscreenElement) {
       document.documentElement.requestFullscreen?.().catch(() => {});
@@ -264,7 +271,6 @@ export default function App() {
     }
   };
 
-  // Login de Perfil
   const handleProfileLogin = (e) => {
     e.preventDefault();
     const targetUser = appUsers.find(u => u.id === selectedLoginUserId);
@@ -287,7 +293,6 @@ export default function App() {
     localStorage.removeItem('nf_logged_user');
   };
 
-  // Câmera Vertical em 1 Toque
   const stopCameraStream = () => {
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach(track => track.stop());
@@ -340,15 +345,14 @@ export default function App() {
     if (!video) return;
     const canvas = document.createElement('canvas');
     canvas.width = video.videoWidth || 1080;
-    canvas.height = video.videoHeight || 1920;
+    canvas.height = video.videoHeight || 1440;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
     closeLiveCamera();
     processDataUrlWithGemini(dataUrl, 'image/jpeg');
   };
 
-  // Aprendizado Neural
   const applyNeuralMemoryToSupplier = (fornecedorNome, cnpj) => {
     const key = (cnpj || fornecedorNome || '').replace(/\D/g, '') || (fornecedorNome || '').toUpperCase().trim();
     if (!key) return {};
@@ -389,73 +393,110 @@ export default function App() {
     }
   };
 
-  // Leitura da NF com Gemini IA
-  const processDataUrlWithGemini = async (base64DataUrl, mimeType) => {
+  // ==========================================================================
+  // LEITURA DE NOTA FISCAL COM FALLBACK AUTOMÁTICO DE CHAVES E MODELOS
+  // ==========================================================================
+  const processDataUrlWithGemini = async (rawDataUrl, mimeType) => {
     setIsScanning(true);
-    setScanMessage('Lendo Nota Fiscal com IA...');
-    const base64Data = base64DataUrl.split(',')[1];
-    const thumbPreview = mimeType.startsWith('image/') ? base64DataUrl : '';
-
-    // Usa chave customizada salva no banco (se houver) ou a chave principal
-    const activeKey = (neuralMemory.customGeminiKey || GEMINI_API_KEY).trim();
+    setLastAiError('');
+    setScanMessage('Otimizando imagem e lendo Nota Fiscal com IA...');
 
     try {
+      const optimizedUrl = await compressImageDataUrl(rawDataUrl);
+      const base64Data = optimizedUrl.split(',')[1];
+      const finalMime = optimizedUrl.startsWith('data:image/jpeg') ? 'image/jpeg' : mimeType;
+
+      // Se a chave salva no painel começar com AIza, usa ela; senão usa a chave AIza do próprio projeto Firebase
+      const savedKey = (neuralMemory.customGeminiKey || '').trim();
+      const candidateKeys = [];
+      if (savedKey && savedKey.startsWith('AIza')) candidateKeys.push(savedKey);
+      if (!candidateKeys.includes(firebaseConfig.apiKey)) candidateKeys.push(firebaseConfig.apiKey);
+      if (savedKey && !candidateKeys.includes(savedKey)) candidateKeys.push(savedKey);
+
+      const modelsToTry = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+
       const prompt = `Você é um assistente especialista em leitura de Notas Fiscais brasileiras (DANFE / NF-e) para gestão de fazenda.
 Contexto neural: ${neuralMemory.customRules || ''}
-Extraia com precisão os campos da Nota Fiscal na imagem ou PDF e retorne APENAS um objeto JSON válido com estas chaves:
-- numeroNF (string)
-- serieNF (string)
-- fornecedor (string, razão social ou nome fantasia do emitente)
-- cnpjFornecedor (string)
-- dataEmissaoNF (string no formato YYYY-MM-DD)
-- valorTotal (string numérica com ponto decimal, ex: "1450.50")
-- resumoMercadoria (string resumindo os itens/produtos da nota)
-- chaveAcesso (string com os 44 dígitos se visível)`;
+Extraia os campos da Nota Fiscal na imagem ou PDF e retorne APENAS um objeto JSON válido com estas chaves:
+{
+  "numeroNF": "string",
+  "serieNF": "string",
+  "fornecedor": "string",
+  "cnpjFornecedor": "string",
+  "dataEmissaoNF": "YYYY-MM-DD",
+  "valorTotal": "string numérica com ponto decimal ex 1450.50",
+  "resumoMercadoria": "string resumindo os produtos",
+  "chaveAcesso": "string"
+}`;
 
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${activeKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{
-              role: 'user',
-              parts: [
-                { text: prompt },
-                { inlineData: { mimeType, data: base64Data } }
-              ]
-            }],
-            generationConfig: { responseMimeType: 'application/json' }
-          })
+      let parsedData = null;
+      let detailedError = '';
+
+      outerLoop:
+      for (const keyToUse of candidateKeys) {
+        for (const modelName of modelsToTry) {
+          try {
+            const response = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${keyToUse}`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  contents: [{
+                    role: 'user',
+                    parts: [
+                      { text: prompt },
+                      { inlineData: { mimeType: finalMime, data: base64Data } }
+                    ]
+                  }],
+                  generationConfig: { responseMimeType: 'application/json' }
+                })
+              }
+            );
+
+            const resJson = await response.json();
+
+            if (!response.ok) {
+              detailedError = resJson?.error?.message || `HTTP ${response.status}`;
+              continue;
+            }
+
+            let rawText = resJson?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+            rawText = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
+            parsedData = JSON.parse(rawText);
+            break outerLoop;
+          } catch (innerErr) {
+            detailedError = innerErr.message || 'Erro de conexão';
+          }
         }
-      );
+      }
 
-      if (!response.ok) throw new Error('Falha na chamada da API Gemini');
-      const result = await response.json();
-      const rawText = result?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-      const parsed = JSON.parse(rawText);
+      if (!parsedData) {
+        throw new Error(detailedError || 'API Gemini não respondeu');
+      }
 
-      const neuralFill = applyNeuralMemoryToSupplier(parsed.fornecedor, parsed.cnpjFornecedor);
+      const neuralFill = applyNeuralMemoryToSupplier(parsedData.fornecedor, parsedData.cnpjFornecedor);
 
       setFormData(prev => ({
         ...prev,
-        numeroNF: parsed.numeroNF || prev.numeroNF,
-        serieNF: parsed.serieNF || prev.serieNF,
-        fornecedor: parsed.fornecedor || prev.fornecedor,
-        cnpjFornecedor: parsed.cnpjFornecedor || prev.cnpjFornecedor,
-        dataEmissaoNF: parsed.dataEmissaoNF || prev.dataEmissaoNF,
-        valorTotal: parsed.valorTotal ? String(parsed.valorTotal) : prev.valorTotal,
-        resumoMercadoria: parsed.resumoMercadoria || prev.resumoMercadoria,
-        chaveAcesso: parsed.chaveAcesso || prev.chaveAcesso,
+        numeroNF: parsedData.numeroNF || prev.numeroNF,
+        serieNF: parsedData.serieNF || prev.serieNF,
+        fornecedor: parsedData.fornecedor || prev.fornecedor,
+        cnpjFornecedor: parsedData.cnpjFornecedor || prev.cnpjFornecedor,
+        dataEmissaoNF: parsedData.dataEmissaoNF || prev.dataEmissaoNF,
+        valorTotal: parsedData.valorTotal ? String(parsedData.valorTotal) : prev.valorTotal,
+        resumoMercadoria: parsedData.resumoMercadoria || prev.resumoMercadoria,
+        chaveAcesso: parsedData.chaveAcesso || prev.chaveAcesso,
         setorDestino: neuralFill.setorDestino || prev.setorDestino,
         portadorMotorista: neuralFill.portadorMotorista || prev.portadorMotorista,
-        anexoPreview: thumbPreview ? 'ANEXADO' : prev.anexoPreview
+        anexoPreview: 'ANEXADO'
       }));
 
       showToast('Dados da NF extraídos automaticamente!');
     } catch (err) {
-      console.error('Erro na leitura IA:', err);
-      showToast('Não foi possível ler automaticamente. Preencha manualmente ou verifique a chave IA no painel Neural.', 'error');
+      console.error('Erro detalhado na leitura IA:', err);
+      setLastAiError(err.message || 'Erro desconhecido');
+      showToast('Falha na leitura automática. Veja o detalhe abaixo dos botões.', 'error');
     } finally {
       setIsScanning(false);
       setScanMessage('');
@@ -470,7 +511,6 @@ Extraia com precisão os campos da Nota Fiscal na imagem ou PDF e retorne APENAS
     reader.readAsDataURL(file);
   };
 
-  // Salvar Despacho
   const handleSaveRemessa = async (e) => {
     e.preventDefault();
     if (!fbUser) return;
@@ -528,11 +568,11 @@ Extraia com precisão os campos da Nota Fiscal na imagem ou PDF e retorne APENAS
       anexoPreview: ''
     });
     setNeuralSuggestionBanner('');
+    setLastAiError('');
     setEditingId(null);
     setIsFormOpen(false);
   };
 
-  // Confirmação 1: Almoxarifado
   const handleConfirmAlmox = async (e) => {
     e.preventDefault();
     if (!almoxModalItem) return;
@@ -547,12 +587,11 @@ Extraia com precisão os campos da Nota Fiscal na imagem ou PDF e retorne APENAS
       });
       setAlmoxModalItem(null);
       showToast('Recebimento no Almoxarifado confirmado!');
-    } catch (err) {
+    } catch {
       showToast('Erro ao confirmar Almoxarifado.', 'error');
     }
   };
 
-  // Confirmação 2: Escritório
   const handleConfirmOffice = async (e) => {
     e.preventDefault();
     if (!officeModalItem) return;
@@ -567,12 +606,11 @@ Extraia com precisão os campos da Nota Fiscal na imagem ou PDF e retorne APENAS
       });
       setOfficeModalItem(null);
       showToast('Retorno da NF ao Escritório confirmado!');
-    } catch (err) {
+    } catch {
       showToast('Erro ao confirmar retorno.', 'error');
     }
   };
 
-  // Exclusão e Zerar Base (Somente Admin)
   const handleDeleteRemessa = async (id) => {
     if (!currentPermissions.isAdmin) return;
     try {
@@ -596,7 +634,6 @@ Extraia com precisão os campos da Nota Fiscal na imagem ou PDF e retorne APENAS
     }
   };
 
-  // Cadastro de Novo Usuário
   const handleAddUser = async (e) => {
     e.preventDefault();
     if (!newUserForm.name.trim()) return;
@@ -621,7 +658,6 @@ Extraia com precisão os campos da Nota Fiscal na imagem ou PDF e retorne APENAS
     showToast('Usuário removido.');
   };
 
-  // Contadores e Filtros
   const stats = useMemo(() => {
     const total = remessas.length;
     const pendAlmox = remessas.filter(r => r.statusAlmoxarifado !== 'RECEBIDO').length;
@@ -652,9 +688,6 @@ Extraia com precisão os campos da Nota Fiscal na imagem ou PDF e retorne APENAS
     return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : d;
   };
 
-  // ============================================================================
-  // TELA DE LOGIN INICIAL POR PERFIL E SENHA
-  // ============================================================================
   if (!loggedUser) {
     return (
       <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
@@ -723,12 +756,8 @@ Extraia com precisão os campos da Nota Fiscal na imagem ou PDF e retorne APENAS
     );
   }
 
-  // ============================================================================
-  // TELA PRINCIPAL ULTRA-COMPACTA E RESPONSIVA
-  // ============================================================================
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 pb-20">
-      {/* Toast Central Superior */}
       {toast && (
         <div className={`fixed top-3 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl shadow-lg text-xs font-semibold text-white flex items-center gap-2 ${
           toast.type === 'error' ? 'bg-red-600' : 'bg-emerald-700'
@@ -738,7 +767,6 @@ Extraia com precisão os campos da Nota Fiscal na imagem ou PDF e retorne APENAS
         </div>
       )}
 
-      {/* BARRA SUPERIOR COMPACTA */}
       <header className="sticky top-0 z-30 bg-white border-b border-slate-200 px-3 py-2 shadow-sm">
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
@@ -812,9 +840,7 @@ Extraia com precisão os campos da Nota Fiscal na imagem ou PDF e retorne APENAS
         </div>
       </header>
 
-      {/* CONTEÚDO PRINCIPAL */}
       <main className="max-w-7xl mx-auto px-3 pt-3 space-y-3">
-        {/* PÍLULAS DE FILTRO RÁPIDO */}
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
           <button
             onClick={() => setStatusFilter('TODOS')}
@@ -868,7 +894,6 @@ Extraia com precisão os campos da Nota Fiscal na imagem ou PDF e retorne APENAS
           </button>
         </div>
 
-        {/* BUSCA RÁPIDA */}
         <div className="relative">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
@@ -880,7 +905,6 @@ Extraia com precisão os campos da Nota Fiscal na imagem ou PDF e retorne APENAS
           />
         </div>
 
-        {/* LISTA DE NOTAS FISCAIS */}
         {loading ? (
           <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center text-slate-500 text-sm">
             Carregando controle de Notas Fiscais...
@@ -893,7 +917,6 @@ Extraia com precisão os campos da Nota Fiscal na imagem ou PDF e retorne APENAS
           </div>
         ) : (
           <>
-            {/* VISÃO MOBILE: CARTÕES COMPACTOS */}
             <div className="grid grid-cols-1 gap-2.5 md:hidden">
               {filteredRemessas.map(item => (
                 <div key={item.id} className="bg-white rounded-xl border border-slate-200 p-3 shadow-sm space-y-2">
@@ -928,7 +951,6 @@ Extraia com precisão os campos da Nota Fiscal na imagem ou PDF e retorne APENAS
                     <span>Portador: <strong className="text-slate-700">{item.portadorMotorista || '-'}</strong></span>
                   </div>
 
-                  {/* BOTÕES DE DUPLA CONFIRMAÇÃO */}
                   <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-100">
                     {item.statusAlmoxarifado === 'RECEBIDO' ? (
                       <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-1.5 text-center">
@@ -994,7 +1016,6 @@ Extraia com precisão os campos da Nota Fiscal na imagem ou PDF e retorne APENAS
               ))}
             </div>
 
-            {/* VISÃO COMPUTADOR: TABELA COMPLETA */}
             <div className="hidden md:block bg-white rounded-2xl border border-slate-200 shadow-sm overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
@@ -1127,9 +1148,6 @@ Extraia com precisão os campos da Nota Fiscal na imagem ou PDF e retorne APENAS
         )}
       </main>
 
-      {/* ========================================================================
-          MODAL: NOVO DESPACHO / LEITURA DE NF
-      ======================================================================== */}
       {isFormOpen && (
         <div className="fixed inset-0 z-40 bg-slate-900/60 flex items-start justify-center p-2 pt-3 overflow-y-auto">
           <div className="bg-white rounded-2xl max-w-2xl w-full p-4 shadow-xl mb-20">
@@ -1142,7 +1160,6 @@ Extraia com precisão os campos da Nota Fiscal na imagem ou PDF e retorne APENAS
               </button>
             </div>
 
-            {/* Botões de Captura: Tirar Foto e Galeria */}
             <div className="my-3 bg-emerald-50/70 border border-emerald-200 rounded-xl p-3">
               <div className="grid grid-cols-2 gap-2">
                 <button
@@ -1172,6 +1189,11 @@ Extraia com precisão os campos da Nota Fiscal na imagem ou PDF e retorne APENAS
               {isScanning && (
                 <div className="mt-2 flex items-center justify-center gap-2 text-xs font-semibold text-emerald-800">
                   <RefreshCw className="w-4 h-4 animate-spin" /> {scanMessage}
+                </div>
+              )}
+              {lastAiError && (
+                <div className="mt-2 text-[11px] text-red-700 bg-red-50 border border-red-200 rounded-lg p-2">
+                  <strong>Detalhe técnico da API:</strong> {lastAiError}
                 </div>
               )}
               {neuralSuggestionBanner && (
@@ -1288,9 +1310,6 @@ Extraia com precisão os campos da Nota Fiscal na imagem ou PDF e retorne APENAS
         </div>
       )}
 
-      {/* ========================================================================
-          MODAL: VISOR DE CÂMERA VERTICAL (RETRATO A4)
-      ======================================================================== */}
       {isCameraOpen && (
         <div className="fixed inset-0 z-50 bg-slate-950/90 flex items-start justify-center p-2 pt-3 overflow-y-auto">
           <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-sm p-3 text-white space-y-3">
@@ -1349,9 +1368,6 @@ Extraia com precisão os campos da Nota Fiscal na imagem ou PDF e retorne APENAS
         </div>
       )}
 
-      {/* ========================================================================
-          MODAL 1: CONFIRMAR RECEBIMENTO NO ALMOXARIFADO
-      ======================================================================== */}
       {almoxModalItem && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-3">
           <div className="bg-white rounded-2xl max-w-md w-full p-4 shadow-xl space-y-3">
@@ -1398,9 +1414,6 @@ Extraia com precisão os campos da Nota Fiscal na imagem ou PDF e retorne APENAS
         </div>
       )}
 
-      {/* ========================================================================
-          MODAL 2: CONFIRMAR RETORNO DA NF NO ESCRITÓRIO
-      ======================================================================== */}
       {officeModalItem && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-3">
           <div className="bg-white rounded-2xl max-w-md w-full p-4 shadow-xl space-y-3">
@@ -1447,9 +1460,6 @@ Extraia com precisão os campos da Nota Fiscal na imagem ou PDF e retorne APENAS
         </div>
       )}
 
-      {/* ========================================================================
-          MODAL ADMIN: GESTÃO DE USUÁRIOS E SENHAS
-      ======================================================================== */}
       {usersModalOpen && currentPermissions.isAdmin && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-start justify-center p-3 pt-6 overflow-y-auto">
           <div className="bg-white rounded-2xl max-w-lg w-full p-4 shadow-xl space-y-4">
@@ -1518,9 +1528,6 @@ Extraia com precisão os campos da Nota Fiscal na imagem ou PDF e retorne APENAS
         </div>
       )}
 
-      {/* ========================================================================
-          MODAL ADMIN: MEMÓRIA NEURAL & CHAVE IA
-      ======================================================================== */}
       {neuralModalOpen && currentPermissions.isAdmin && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-start justify-center p-3 pt-6 overflow-y-auto">
           <div className="bg-white rounded-2xl max-w-lg w-full p-4 shadow-xl space-y-3 text-xs">
@@ -1542,10 +1549,10 @@ Extraia com precisão os campos da Nota Fiscal na imagem ou PDF e retorne APENAS
             </div>
 
             <div>
-              <label className="font-semibold text-slate-700">Chave Gemini API (Opcional se quiser atualizar):</label>
+              <label className="font-semibold text-slate-700">Chave Gemini API (Use a chave começada em AIzaSy...):</label>
               <input
                 type="text"
-                placeholder="Ex: AIzaSy..."
+                placeholder="AIzaSyAh06a2MfQIfzTRrLBfqgDz3xpwENBofnI"
                 value={neuralMemory.customGeminiKey || ''}
                 onChange={(e) => setNeuralMemory({ ...neuralMemory, customGeminiKey: e.target.value })}
                 className="w-full mt-1 p-2 border rounded-lg font-mono"
@@ -1570,9 +1577,6 @@ Extraia com precisão os campos da Nota Fiscal na imagem ou PDF e retorne APENAS
         </div>
       )}
 
-      {/* ========================================================================
-          MODAL ADMIN: ZERAR BASE
-      ======================================================================== */}
       {clearDbModalOpen && currentPermissions.isAdmin && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-3">
           <div className="bg-white rounded-2xl max-w-sm w-full p-4 shadow-xl space-y-3 text-center">
