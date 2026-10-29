@@ -82,7 +82,7 @@ const SETORES_FAZENDA = [
   'Administrativo / Sede'
 ];
 
-// Função auxiliar para comprimir imagem antes de enviar à IA (evita erro de tamanho no 4G)
+// Comprime a imagem antes de enviar à IA para leitura rápida no telemóvel/computador
 const compressImageDataUrl = (dataUrl, maxWidth = 1400) => {
   return new Promise((resolve) => {
     if (!dataUrl.startsWith('data:image/')) {
@@ -322,8 +322,8 @@ export default function App() {
         setCameraReady(true);
       }
     } catch (err) {
-      console.warn('Erro câmera:', err);
-      setCameraError('Permissão de câmera bloqueada ou indisponível. Use o botão Galeria.');
+      console.warn('Erro câmara:', err);
+      setCameraError('Permissão de câmara bloqueada ou indisponível. Use o botão Galeria.');
     }
   };
 
@@ -394,7 +394,7 @@ export default function App() {
   };
 
   // ==========================================================================
-  // LEITURA DE NOTA FISCAL COM FALLBACK AUTOMÁTICO DE CHAVES E MODELOS
+  // LEITURA DE NOTA FISCAL COMPATÍVEL COM CHAVES DO PAINEL NEURAL
   // ==========================================================================
   const processDataUrlWithGemini = async (rawDataUrl, mimeType) => {
     setIsScanning(true);
@@ -406,12 +406,10 @@ export default function App() {
       const base64Data = optimizedUrl.split(',')[1];
       const finalMime = optimizedUrl.startsWith('data:image/jpeg') ? 'image/jpeg' : mimeType;
 
-      // Se a chave salva no painel começar com AIza, usa ela; senão usa a chave AIza do próprio projeto Firebase
       const savedKey = (neuralMemory.customGeminiKey || '').trim();
       const candidateKeys = [];
-      if (savedKey && savedKey.startsWith('AIza')) candidateKeys.push(savedKey);
+      if (savedKey) candidateKeys.push(savedKey);
       if (!candidateKeys.includes(firebaseConfig.apiKey)) candidateKeys.push(firebaseConfig.apiKey);
-      if (savedKey && !candidateKeys.includes(savedKey)) candidateKeys.push(savedKey);
 
       const modelsToTry = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
 
@@ -437,10 +435,13 @@ Extraia os campos da Nota Fiscal na imagem ou PDF e retorne APENAS um objeto JSO
         for (const modelName of modelsToTry) {
           try {
             const response = await fetch(
-              `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${keyToUse}`,
+              `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(keyToUse)}`,
               {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                  'Content-Type': 'application/json',
+                  'x-goog-api-key': keyToUse
+                },
                 body: JSON.stringify({
                   contents: [{
                     role: 'user',
@@ -530,10 +531,10 @@ Extraia os campos da Nota Fiscal na imagem ou PDF e retorne APENAS um objeto JSO
 
       if (editingId) {
         await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'remessas_nf', editingId), payload);
-        showToast('Registro atualizado!');
+        showToast('Registo atualizado!');
       } else {
         await addDoc(colRef, { ...payload, createdAt: Date.now() });
-        showToast('Despacho registrado com sucesso!');
+        showToast('Despacho registado com sucesso!');
       }
 
       await learnFromSavedDispatch(formData);
@@ -615,7 +616,7 @@ Extraia os campos da Nota Fiscal na imagem ou PDF e retorne APENAS um objeto JSO
     if (!currentPermissions.isAdmin) return;
     try {
       await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'remessas_nf', id));
-      showToast('Registro excluído.');
+      showToast('Registo excluído.');
     } catch {
       showToast('Erro ao excluir.', 'error');
     }
@@ -646,7 +647,7 @@ Extraia os campos da Nota Fiscal na imagem ou PDF e retorne APENAS um objeto JSO
       active: true
     });
     setNewUserForm({ name: '', role: 'compras', pin: '1236' });
-    showToast('Usuário cadastrado!');
+    showToast('Utilizador cadastrado!');
   };
 
   const handleDeleteUser = async (uId) => {
@@ -655,7 +656,7 @@ Extraia os campos da Nota Fiscal na imagem ou PDF e retorne APENAS um objeto JSO
       return;
     }
     await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'usuarios_sistema', uId));
-    showToast('Usuário removido.');
+    showToast('Utilizador removido.');
   };
 
   const stats = useMemo(() => {
@@ -698,14 +699,14 @@ Extraia os campos da Nota Fiscal na imagem ou PDF e retorne APENAS um objeto JSO
             </div>
             <div>
               <h1 className="text-lg font-bold text-slate-800 leading-tight">Controle de NFs</h1>
-              <p className="text-xs text-slate-500">Selecione seu perfil para entrar</p>
+              <p className="text-xs text-slate-500">Selecione o seu perfil para entrar</p>
             </div>
           </div>
 
           <form onSubmit={handleProfileLogin} className="space-y-4">
             <div>
               <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
-                Usuário / Perfil
+                Utilizador / Perfil
               </label>
               <select
                 value={selectedLoginUserId}
@@ -730,7 +731,7 @@ Extraia os campos da Nota Fiscal na imagem ou PDF e retorne APENAS um objeto JSO
               <input
                 type="password"
                 inputMode="numeric"
-                placeholder="Digite sua senha (ex: 1236)"
+                placeholder="Digite a sua senha (ex: 1236)"
                 value={loginPinInput}
                 onChange={(e) => {
                   setLoginPinInput(e.target.value);
@@ -772,7 +773,7 @@ Extraia os campos da Nota Fiscal na imagem ou PDF e retorne APENAS um objeto JSO
           <div className="flex items-center gap-2 min-w-0">
             <button
               onClick={toggleFullScreen}
-              title="Tela Cheia"
+              title="Ecrã Inteiro"
               className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 shrink-0"
             >
               {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
@@ -793,7 +794,7 @@ Extraia os campos da Nota Fiscal na imagem ou PDF e retorne APENAS um objeto JSO
                 <button
                   onClick={() => setUsersModalOpen(true)}
                   className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium flex items-center gap-1"
-                  title="Gerenciar Usuários"
+                  title="Gerir Utilizadores"
                 >
                   <Users className="w-4 h-4" />
                   <span className="hidden md:inline">Usuários</span>
@@ -831,771 +832,4 @@ Extraia os campos da Nota Fiscal na imagem ou PDF e retorne APENAS um objeto JSO
 
             <button
               onClick={handleLogout}
-              title="Trocar Usuário / Sair"
-              className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      </header>
-
-      <main className="max-w-7xl mx-auto px-3 pt-3 space-y-3">
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
-          <button
-            onClick={() => setStatusFilter('TODOS')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap border transition flex items-center gap-1.5 ${
-              statusFilter === 'TODOS'
-                ? 'bg-slate-800 text-white border-slate-800'
-                : 'bg-white text-slate-700 border-slate-200'
-            }`}
-          >
-            <span>Todas</span>
-            <span className="px-1.5 py-0.2 rounded-full bg-slate-200/30 text-[11px]">{stats.total}</span>
-          </button>
-
-          <button
-            onClick={() => setStatusFilter('PEND_ALMOX')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap border transition flex items-center gap-1.5 ${
-              statusFilter === 'PEND_ALMOX'
-                ? 'bg-amber-600 text-white border-amber-600'
-                : 'bg-white text-amber-700 border-amber-200'
-            }`}
-          >
-            <Warehouse className="w-3.5 h-3.5" />
-            <span>Falta Almoxarifado</span>
-            <span className="px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-900 text-[11px]">{stats.pendAlmox}</span>
-          </button>
-
-          <button
-            onClick={() => setStatusFilter('PEND_ESCRITORIO')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap border transition flex items-center gap-1.5 ${
-              statusFilter === 'PEND_ESCRITORIO'
-                ? 'bg-blue-600 text-white border-blue-600'
-                : 'bg-white text-blue-700 border-blue-200'
-            }`}
-          >
-            <Building2 className="w-3.5 h-3.5" />
-            <span>Falta Escritório</span>
-            <span className="px-1.5 py-0.2 rounded-full bg-blue-100 text-blue-900 text-[11px]">{stats.pendOffice}</span>
-          </button>
-
-          <button
-            onClick={() => setStatusFilter('CONCLUIDO')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap border transition flex items-center gap-1.5 ${
-              statusFilter === 'CONCLUIDO'
-                ? 'bg-emerald-600 text-white border-emerald-600'
-                : 'bg-white text-emerald-700 border-emerald-200'
-            }`}
-          >
-            <CheckCircle2 className="w-3.5 h-3.5" />
-            <span>Concluídas</span>
-            <span className="px-1.5 py-0.2 rounded-full bg-emerald-100 text-emerald-900 text-[11px]">{stats.concluidos}</span>
-          </button>
-        </div>
-
-        <div className="relative">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Buscar Nº da NF, fornecedor, mercadoria ou motorista..."
-            className="w-full pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-emerald-500 outline-none"
-          />
-        </div>
-
-        {loading ? (
-          <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center text-slate-500 text-sm">
-            Carregando controle de Notas Fiscais...
-          </div>
-        ) : filteredRemessas.length === 0 ? (
-          <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center space-y-2">
-            <FileText className="w-8 h-8 text-slate-400 mx-auto" />
-            <p className="text-sm font-semibold text-slate-700">Nenhuma Nota Fiscal registrada</p>
-            <p className="text-xs text-slate-500">Clique em "+ Nova NF" no topo para fotografar ou anexar a primeira nota.</p>
-          </div>
-        ) : (
-          <>
-            <div className="grid grid-cols-1 gap-2.5 md:hidden">
-              {filteredRemessas.map(item => (
-                <div key={item.id} className="bg-white rounded-xl border border-slate-200 p-3 shadow-sm space-y-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-bold text-sm text-slate-900">NF {item.numeroNF}</span>
-                        <span className={`px-1.5 py-0.5 text-[10px] font-bold rounded ${
-                          item.foiComNota === 'SIM' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'
-                        }`}>
-                          {item.foiComNota === 'SIM' ? 'Com NF' : 'Sem NF'}
-                        </span>
-                      </div>
-                      <p className="text-xs font-semibold text-slate-700 truncate max-w-[230px]">{item.fornecedor}</p>
-                    </div>
-                    <div className="text-right">
-                      <span className="text-xs font-bold text-slate-800">
-                        {Number(item.valorTotal || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                      </span>
-                      <p className="text-[10px] text-slate-400">Envio: {formatDateBR(item.dataEnvioFazenda)}</p>
-                    </div>
-                  </div>
-
-                  {item.resumoMercadoria && (
-                    <p className="text-xs text-slate-600 bg-slate-50 p-2 rounded-lg line-clamp-2">
-                      {item.resumoMercadoria}
-                    </p>
-                  )}
-
-                  <div className="flex items-center justify-between text-[11px] text-slate-500">
-                    <span>Setor: <strong className="text-slate-700">{item.setorDestino}</strong></span>
-                    <span>Portador: <strong className="text-slate-700">{item.portadorMotorista || '-'}</strong></span>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-100">
-                    {item.statusAlmoxarifado === 'RECEBIDO' ? (
-                      <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-1.5 text-center">
-                        <div className="text-[10px] font-bold text-emerald-800 flex items-center justify-center gap-1">
-                          <CheckCircle2 className="w-3 h-3" /> Almoxarifado OK
-                        </div>
-                        <div className="text-[10px] text-emerald-700">
-                          {formatDateBR(item.dataRecebimentoAlmox)} • {item.recebidoPorAlmox}
-                        </div>
-                      </div>
-                    ) : (
-                      <button
-                        disabled={!currentPermissions.canConfirmAlmox}
-                        onClick={() => {
-                          setAlmoxConfirmData({
-                            dataRecebimentoAlmox: todayStr,
-                            recebidoPorAlmox: loggedUser.name,
-                            observacoesAlmox: item.observacoes || ''
-                          });
-                          setAlmoxModalItem(item);
-                        }}
-                        className={`py-2 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 ${
-                          currentPermissions.canConfirmAlmox
-                            ? 'bg-emerald-600 text-white shadow-sm'
-                            : 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                        }`}
-                      >
-                        <Warehouse className="w-3.5 h-3.5" /> Confirmar Almox.
-                      </button>
-                    )}
-
-                    {item.statusRetornoEscritorio === 'RECEBIDO' ? (
-                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-1.5 text-center">
-                        <div className="text-[10px] font-bold text-blue-800 flex items-center justify-center gap-1">
-                          <CheckCircle2 className="w-3 h-3" /> Escritório OK
-                        </div>
-                        <div className="text-[10px] text-blue-700">
-                          {formatDateBR(item.dataRetornoEscritorio)} • {item.recebidoPorEscritorio}
-                        </div>
-                      </div>
-                    ) : (
-                      <button
-                        disabled={!currentPermissions.canConfirmOffice}
-                        onClick={() => {
-                          setOfficeConfirmData({
-                            dataRetornoEscritorio: todayStr,
-                            recebidoPorEscritorio: loggedUser.name,
-                            observacoes: item.observacoes || ''
-                          });
-                          setOfficeModalItem(item);
-                        }}
-                        className={`py-2 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 ${
-                          currentPermissions.canConfirmOffice
-                            ? 'bg-blue-600 text-white shadow-sm'
-                            : 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                        }`}
-                      >
-                        <Building2 className="w-3.5 h-3.5" /> Confirmar Escritório
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="hidden md:block bg-white rounded-2xl border border-slate-200 shadow-sm overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-600 uppercase">
-                    <th className="py-3 px-3">NF / Emissão</th>
-                    <th className="py-3 px-3">Fornecedor / Mercadoria</th>
-                    <th className="py-3 px-3">Envio / Destino</th>
-                    <th className="py-3 px-3 text-center">Foi c/ NF?</th>
-                    <th className="py-3 px-3">1. Recebimento Almoxarifado</th>
-                    <th className="py-3 px-3">2. Retorno Escritório</th>
-                    <th className="py-3 px-3 text-right">Ações</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200 text-xs">
-                  {filteredRemessas.map(item => (
-                    <tr key={item.id} className="hover:bg-slate-50/80">
-                      <td className="py-3 px-3 align-top">
-                        <div className="font-bold text-slate-900">NF {item.numeroNF}</div>
-                        <div className="text-slate-500">{formatDateBR(item.dataEmissaoNF)}</div>
-                        <div className="font-semibold text-emerald-700 mt-0.5">
-                          {Number(item.valorTotal || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                        </div>
-                      </td>
-                      <td className="py-3 px-3 align-top max-w-xs">
-                        <div className="font-semibold text-slate-800">{item.fornecedor}</div>
-                        <div className="text-slate-500 line-clamp-2">{item.resumoMercadoria || '-'}</div>
-                      </td>
-                      <td className="py-3 px-3 align-top">
-                        <div className="font-medium text-slate-800">{item.setorDestino}</div>
-                        <div className="text-slate-500">Envio: {formatDateBR(item.dataEnvioFazenda)}</div>
-                        <div className="text-slate-500">Portador: {item.portadorMotorista || '-'}</div>
-                      </td>
-                      <td className="py-3 px-3 align-top text-center">
-                        <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
-                          item.foiComNota === 'SIM' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
-                        }`}>
-                          {item.foiComNota}
-                        </span>
-                      </td>
-                      <td className="py-3 px-3 align-top">
-                        {item.statusAlmoxarifado === 'RECEBIDO' ? (
-                          <div className="text-emerald-700">
-                            <div className="font-bold flex items-center gap-1">
-                              <CheckCircle2 className="w-3.5 h-3.5" /> Recebido
-                            </div>
-                            <div className="text-[11px]">Data: {formatDateBR(item.dataRecebimentoAlmox)}</div>
-                            <div className="text-[11px]">Por: {item.recebidoPorAlmox}</div>
-                          </div>
-                        ) : (
-                          <button
-                            disabled={!currentPermissions.canConfirmAlmox}
-                            onClick={() => {
-                              setAlmoxConfirmData({
-                                dataRecebimentoAlmox: todayStr,
-                                recebidoPorAlmox: loggedUser.name,
-                                observacoesAlmox: item.observacoes || ''
-                              });
-                              setAlmoxModalItem(item);
-                            }}
-                            className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 ${
-                              currentPermissions.canConfirmAlmox
-                                ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                                : 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                            }`}
-                          >
-                            <Warehouse className="w-3.5 h-3.5" /> Confirmar Almox.
-                          </button>
-                        )}
-                      </td>
-                      <td className="py-3 px-3 align-top">
-                        {item.statusRetornoEscritorio === 'RECEBIDO' ? (
-                          <div className="text-blue-700">
-                            <div className="font-bold flex items-center gap-1">
-                              <CheckCircle2 className="w-3.5 h-3.5" /> Retornou
-                            </div>
-                            <div className="text-[11px]">Data: {formatDateBR(item.dataRetornoEscritorio)}</div>
-                            <div className="text-[11px]">Por: {item.recebidoPorEscritorio}</div>
-                          </div>
-                        ) : (
-                          <button
-                            disabled={!currentPermissions.canConfirmOffice}
-                            onClick={() => {
-                              setOfficeConfirmData({
-                                dataRetornoEscritorio: todayStr,
-                                recebidoPorEscritorio: loggedUser.name,
-                                observacoes: item.observacoes || ''
-                              });
-                              setOfficeModalItem(item);
-                            }}
-                            className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 ${
-                              currentPermissions.canConfirmOffice
-                                ? 'bg-blue-600 hover:bg-blue-700 text-white'
-                                : 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                            }`}
-                          >
-                            <Building2 className="w-3.5 h-3.5" /> Confirmar Escritório
-                          </button>
-                        )}
-                      </td>
-                      <td className="py-3 px-3 align-top text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          <button
-                            onClick={() => {
-                              setFormData({ ...item });
-                              setEditingId(item.id);
-                              setIsFormOpen(true);
-                            }}
-                            className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100"
-                            title="Editar"
-                          >
-                            <Edit3 className="w-4 h-4" />
-                          </button>
-                          {currentPermissions.isAdmin && (
-                            <button
-                              onClick={() => handleDeleteRemessa(item.id)}
-                              className="p-1.5 rounded-lg text-red-500 hover:bg-red-50"
-                              title="Excluir"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
-      </main>
-
-      {isFormOpen && (
-        <div className="fixed inset-0 z-40 bg-slate-900/60 flex items-start justify-center p-2 pt-3 overflow-y-auto">
-          <div className="bg-white rounded-2xl max-w-2xl w-full p-4 shadow-xl mb-20">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-200">
-              <h2 className="text-sm font-bold text-slate-800">
-                {editingId ? 'Editar Registro de NF' : 'Novo Despacho de Mercadoria'}
-              </h2>
-              <button onClick={resetForm} className="p-1 rounded-lg text-slate-400 hover:bg-slate-100">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="my-3 bg-emerald-50/70 border border-emerald-200 rounded-xl p-3">
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={openLiveCamera}
-                  disabled={isScanning}
-                  className="py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl text-xs flex items-center justify-center gap-2 shadow-sm"
-                >
-                  <Camera className="w-4 h-4" /> Tirar Foto
-                </button>
-                <button
-                  type="button"
-                  onClick={() => galleryInputRef.current?.click()}
-                  disabled={isScanning}
-                  className="py-2.5 px-3 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 font-semibold rounded-xl text-xs flex items-center justify-center gap-2"
-                >
-                  <ImageIcon className="w-4 h-4" /> Galeria / PDF
-                </button>
-              </div>
-              <input
-                ref={galleryInputRef}
-                type="file"
-                accept="image/*,application/pdf"
-                onChange={handleFileUpload}
-                className="hidden"
-              />
-              {isScanning && (
-                <div className="mt-2 flex items-center justify-center gap-2 text-xs font-semibold text-emerald-800">
-                  <RefreshCw className="w-4 h-4 animate-spin" /> {scanMessage}
-                </div>
-              )}
-              {lastAiError && (
-                <div className="mt-2 text-[11px] text-red-700 bg-red-50 border border-red-200 rounded-lg p-2">
-                  <strong>Detalhe técnico da API:</strong> {lastAiError}
-                </div>
-              )}
-              {neuralSuggestionBanner && (
-                <div className="mt-2 text-[11px] text-purple-800 bg-purple-50 border border-purple-200 rounded-lg px-2.5 py-1.5 flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5 shrink-0" /> {neuralSuggestionBanner}
-                </div>
-              )}
-            </div>
-
-            <form onSubmit={handleSaveRemessa} className="space-y-3 text-xs">
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-                <div>
-                  <label className="font-semibold text-slate-600">Nº da NF *</label>
-                  <input
-                    type="text"
-                    required
-                    value={formData.numeroNF}
-                    onChange={(e) => setFormData({ ...formData, numeroNF: e.target.value })}
-                    className="w-full mt-1 px-2.5 py-2 border border-slate-300 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="font-semibold text-slate-600">Valor Total (R$)</label>
-                  <input
-                    type="text"
-                    value={formData.valorTotal}
-                    onChange={(e) => setFormData({ ...formData, valorTotal: e.target.value })}
-                    className="w-full mt-1 px-2.5 py-2 border border-slate-300 rounded-lg"
-                  />
-                </div>
-                <div className="col-span-2 sm:col-span-1">
-                  <label className="font-semibold text-slate-600">Data Emissão NF</label>
-                  <input
-                    type="date"
-                    value={formData.dataEmissaoNF}
-                    onChange={(e) => setFormData({ ...formData, dataEmissaoNF: e.target.value })}
-                    className="w-full mt-1 px-2.5 py-2 border border-slate-300 rounded-lg"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                <div>
-                  <label className="font-semibold text-slate-600">Fornecedor *</label>
-                  <input
-                    type="text"
-                    required
-                    value={formData.fornecedor}
-                    onChange={(e) => setFormData({ ...formData, fornecedor: e.target.value })}
-                    className="w-full mt-1 px-2.5 py-2 border border-slate-300 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="font-semibold text-slate-600">Resumo da Mercadoria</label>
-                  <input
-                    type="text"
-                    value={formData.resumoMercadoria}
-                    onChange={(e) => setFormData({ ...formData, resumoMercadoria: e.target.value })}
-                    className="w-full mt-1 px-2.5 py-2 border border-slate-300 rounded-lg"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2 border-t border-slate-100">
-                <div>
-                  <label className="font-semibold text-slate-600">Setor na Fazenda</label>
-                  <select
-                    value={formData.setorDestino}
-                    onChange={(e) => setFormData({ ...formData, setorDestino: e.target.value })}
-                    className="w-full mt-1 px-2.5 py-2 border border-slate-300 rounded-lg bg-white"
-                  >
-                    {SETORES_FAZENDA.map(s => <option key={s} value={s}>{s}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="font-semibold text-slate-600">Motorista / Portador</label>
-                  <input
-                    type="text"
-                    value={formData.portadorMotorista}
-                    onChange={(e) => setFormData({ ...formData, portadorMotorista: e.target.value })}
-                    className="w-full mt-1 px-2.5 py-2 border border-slate-300 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="font-semibold text-slate-600">Mercadoria foi c/ Nota?</label>
-                  <select
-                    value={formData.foiComNota}
-                    onChange={(e) => setFormData({ ...formData, foiComNota: e.target.value })}
-                    className="w-full mt-1 px-2.5 py-2 border border-slate-300 rounded-lg bg-white font-semibold"
-                  >
-                    <option value="SIM">SIM - Foi com a NF</option>
-                    <option value="NAO">NÃO - Sem NF física</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200">
-                <button
-                  type="button"
-                  onClick={resetForm}
-                  className="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 font-semibold"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-sm"
-                >
-                  Salvar Despacho
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {isCameraOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/90 flex items-start justify-center p-2 pt-3 overflow-y-auto">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-sm p-3 text-white space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold flex items-center gap-1.5 text-emerald-400">
-                <Camera className="w-4 h-4" /> Posição Vertical (Nota Fiscal)
-              </span>
-              <button onClick={closeLiveCamera} className="p-1 rounded-lg text-slate-400 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="relative w-full aspect-[3/4] bg-black rounded-xl overflow-hidden border-2 border-emerald-500/60">
-              <video
-                ref={setVideoRef}
-                autoPlay
-                playsInline
-                muted
-                className="w-full h-full object-cover"
-              />
-              <div className="absolute inset-3 border-2 border-dashed border-white/60 rounded-lg pointer-events-none flex flex-col justify-between p-2 text-center">
-                <span className="bg-black/60 text-[10px] text-emerald-300 px-2 py-0.5 rounded mx-auto">
-                  Topo da Nota Fiscal (Celular em pé)
-                </span>
-                <span className="bg-black/60 text-[10px] text-white/80 px-2 py-0.5 rounded mx-auto">
-                  Base da Nota Fiscal
-                </span>
-              </div>
-            </div>
-
-            {cameraError && (
-              <p className="text-xs text-amber-300 text-center bg-amber-950/60 p-2 rounded-lg">{cameraError}</p>
-            )}
-
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={capturePhotoFromVideo}
-                disabled={!cameraReady}
-                className="py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 shadow"
-              >
-                <Camera className="w-4 h-4" /> Capturar Foto
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  closeLiveCamera();
-                  galleryInputRef.current?.click();
-                }}
-                className="py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold rounded-xl text-xs flex items-center justify-center gap-1.5 border border-slate-600"
-              >
-                <ImageIcon className="w-4 h-4" /> Galeria
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {almoxModalItem && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-3">
-          <div className="bg-white rounded-2xl max-w-md w-full p-4 shadow-xl space-y-3">
-            <div className="flex items-center justify-between border-b pb-2">
-              <h3 className="text-sm font-bold text-emerald-800 flex items-center gap-1.5">
-                <Warehouse className="w-4 h-4" /> Confirmar Recebimento no Almoxarifado
-              </h3>
-              <button onClick={() => setAlmoxModalItem(null)}><X className="w-4 h-4 text-slate-400" /></button>
-            </div>
-            <p className="text-xs text-slate-600">
-              NF <strong>{almoxModalItem.numeroNF}</strong> • {almoxModalItem.fornecedor}
-            </p>
-            <form onSubmit={handleConfirmAlmox} className="space-y-3 text-xs">
-              <div>
-                <label className="font-semibold text-slate-700">Data do Recebimento no Almoxarifado *</label>
-                <input
-                  type="date"
-                  required
-                  value={almoxConfirmData.dataRecebimentoAlmox}
-                  onChange={(e) => setAlmoxConfirmData({ ...almoxConfirmData, dataRecebimentoAlmox: e.target.value })}
-                  className="w-full mt-1 px-3 py-2 border border-slate-300 rounded-lg"
-                />
-              </div>
-              <div>
-                <label className="font-semibold text-slate-700">Recebido por (Almoxarife) *</label>
-                <input
-                  type="text"
-                  required
-                  value={almoxConfirmData.recebidoPorAlmox}
-                  onChange={(e) => setAlmoxConfirmData({ ...almoxConfirmData, recebidoPorAlmox: e.target.value })}
-                  className="w-full mt-1 px-3 py-2 border border-slate-300 rounded-lg"
-                />
-              </div>
-              <div className="flex justify-end gap-2 pt-2">
-                <button type="button" onClick={() => setAlmoxModalItem(null)} className="px-3 py-2 border rounded-lg">
-                  Cancelar
-                </button>
-                <button type="submit" className="px-4 py-2 bg-emerald-600 text-white font-semibold rounded-lg">
-                  Confirmar Recebimento
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {officeModalItem && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-3">
-          <div className="bg-white rounded-2xl max-w-md w-full p-4 shadow-xl space-y-3">
-            <div className="flex items-center justify-between border-b pb-2">
-              <h3 className="text-sm font-bold text-blue-800 flex items-center gap-1.5">
-                <Building2 className="w-4 h-4" /> Confirmar Retorno da NF ao Escritório
-              </h3>
-              <button onClick={() => setOfficeModalItem(null)}><X className="w-4 h-4 text-slate-400" /></button>
-            </div>
-            <p className="text-xs text-slate-600">
-              NF <strong>{officeModalItem.numeroNF}</strong> • {officeModalItem.fornecedor}
-            </p>
-            <form onSubmit={handleConfirmOffice} className="space-y-3 text-xs">
-              <div>
-                <label className="font-semibold text-slate-700">Data de Retorno ao Escritório *</label>
-                <input
-                  type="date"
-                  required
-                  value={officeConfirmData.dataRetornoEscritorio}
-                  onChange={(e) => setOfficeConfirmData({ ...officeConfirmData, dataRetornoEscritorio: e.target.value })}
-                  className="w-full mt-1 px-3 py-2 border border-slate-300 rounded-lg"
-                />
-              </div>
-              <div>
-                <label className="font-semibold text-slate-700">Conferido por *</label>
-                <input
-                  type="text"
-                  required
-                  value={officeConfirmData.recebidoPorEscritorio}
-                  onChange={(e) => setOfficeConfirmData({ ...officeConfirmData, recebidoPorEscritorio: e.target.value })}
-                  className="w-full mt-1 px-3 py-2 border border-slate-300 rounded-lg"
-                />
-              </div>
-              <div className="flex justify-end gap-2 pt-2">
-                <button type="button" onClick={() => setOfficeModalItem(null)} className="px-3 py-2 border rounded-lg">
-                  Cancelar
-                </button>
-                <button type="submit" className="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg">
-                  Confirmar no Escritório
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {usersModalOpen && currentPermissions.isAdmin && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-start justify-center p-3 pt-6 overflow-y-auto">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-4 shadow-xl space-y-4">
-            <div className="flex items-center justify-between border-b pb-2">
-              <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
-                <Users className="w-4 h-4 text-emerald-600" /> Cadastro de Usuários e Senhas
-              </h3>
-              <button onClick={() => setUsersModalOpen(false)}><X className="w-5 h-5 text-slate-400" /></button>
-            </div>
-
-            <form onSubmit={handleAddUser} className="grid grid-cols-1 sm:grid-cols-3 gap-2 bg-slate-50 p-3 rounded-xl border text-xs">
-              <input
-                type="text"
-                placeholder="Nome do colaborador"
-                required
-                value={newUserForm.name}
-                onChange={(e) => setNewUserForm({ ...newUserForm, name: e.target.value })}
-                className="px-2.5 py-2 border rounded-lg bg-white"
-              />
-              <select
-                value={newUserForm.role}
-                onChange={(e) => setNewUserForm({
-                  ...newUserForm,
-                  role: e.target.value,
-                  pin: ROLES_CONFIG[e.target.value]?.defaultPin || '1234'
-                })}
-                className="px-2.5 py-2 border rounded-lg bg-white"
-              >
-                <option value="compras">Compras</option>
-                <option value="auxiliar">Auxiliar de Escritório</option>
-                <option value="almoxarife">Almoxarife</option>
-                <option value="admin">Administrador</option>
-              </select>
-              <div className="flex gap-1.5">
-                <input
-                  type="text"
-                  placeholder="PIN"
-                  value={newUserForm.pin}
-                  onChange={(e) => setNewUserForm({ ...newUserForm, pin: e.target.value })}
-                  className="w-20 px-2.5 py-2 border rounded-lg bg-white font-mono text-center"
-                />
-                <button type="submit" className="flex-1 bg-emerald-600 text-white font-semibold rounded-lg px-3">
-                  Adicionar
-                </button>
-              </div>
-            </form>
-
-            <div className="divide-y border rounded-xl max-h-64 overflow-y-auto text-xs">
-              {appUsers.map(u => (
-                <div key={u.id} className="p-2.5 flex items-center justify-between">
-                  <div>
-                    <div className="font-bold text-slate-800">{u.name}</div>
-                    <div className="text-slate-500">
-                      Perfil: {ROLES_CONFIG[u.role]?.label} • Senha PIN: <strong className="font-mono">{u.pin}</strong>
-                    </div>
-                  </div>
-                  {u.id !== 'u_admin' && (
-                    <button onClick={() => handleDeleteUser(u.id)} className="text-red-500 p-1 hover:bg-red-50 rounded">
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {neuralModalOpen && currentPermissions.isAdmin && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-start justify-center p-3 pt-6 overflow-y-auto">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-4 shadow-xl space-y-3 text-xs">
-            <div className="flex items-center justify-between border-b pb-2">
-              <h3 className="text-sm font-bold text-purple-900 flex items-center gap-1.5">
-                <Brain className="w-4 h-4 text-purple-600" /> Sistema Neural & Chave IA
-              </h3>
-              <button onClick={() => setNeuralModalOpen(false)}><X className="w-5 h-5 text-slate-400" /></button>
-            </div>
-
-            <div>
-              <label className="font-semibold text-slate-700">Diretrizes Neurais de Leitura de NF:</label>
-              <textarea
-                rows={3}
-                value={neuralMemory.customRules || ''}
-                onChange={(e) => setNeuralMemory({ ...neuralMemory, customRules: e.target.value })}
-                className="w-full mt-1 p-2 border rounded-lg"
-              />
-            </div>
-
-            <div>
-              <label className="font-semibold text-slate-700">Chave Gemini API (Use a chave começada em AIzaSy...):</label>
-              <input
-                type="text"
-                placeholder="AIzaSyAh06a2MfQIfzTRrLBfqgDz3xpwENBofnI"
-                value={neuralMemory.customGeminiKey || ''}
-                onChange={(e) => setNeuralMemory({ ...neuralMemory, customGeminiKey: e.target.value })}
-                className="w-full mt-1 p-2 border rounded-lg font-mono"
-              />
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={async () => {
-                  const neuralDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'sistema_neural', 'config_principal');
-                  await setDoc(neuralDocRef, neuralMemory, { merge: true });
-                  setNeuralModalOpen(false);
-                  showToast('Memória Neural atualizada!');
-                }}
-                className="px-4 py-2 bg-purple-600 text-white font-semibold rounded-lg"
-              >
-                Salvar Configurações Neurais
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {clearDbModalOpen && currentPermissions.isAdmin && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-3">
-          <div className="bg-white rounded-2xl max-w-sm w-full p-4 shadow-xl space-y-3 text-center">
-            <Trash2 className="w-8 h-8 text-red-600 mx-auto" />
-            <h3 className="text-sm font-bold text-slate-800">Zerar Base de Dados?</h3>
-            <p className="text-xs text-slate-600">
-              Todos os {remessas.length} registros serão apagados permanentemente.
-            </p>
-            <div className="flex justify-center gap-2 pt-2 text-xs">
-              <button onClick={() => setClearDbModalOpen(false)} className="px-4 py-2 border rounded-lg">
-                Cancelar
-              </button>
-              <button onClick={handleClearAllDatabase} className="px-4 py-2 bg-red-600 text-white font-semibold rounded-lg">
-                Confirmar e Zerar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
+              title="Trocar Utilizador / Sair"
