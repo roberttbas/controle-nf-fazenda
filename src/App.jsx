@@ -40,7 +40,8 @@ import {
   History,
   Copy,
   Key,
-  Package
+  Package,
+  ZoomIn
 } from 'lucide-react';
 
 // ============================================================================
@@ -120,8 +121,8 @@ const SETORES_FAZENDA = [
   'Administrativo / Sede'
 ];
 
-// Comprime a imagem antes de enviar à IA para leitura rápida
-const compressImageDataUrl = (dataUrl, maxWidth = 1400) => {
+// Comprime a imagem antes de enviar à IA para leitura rápida e leve no 4G
+const compressImageDataUrl = (dataUrl, maxWidth = 1350) => {
   return new Promise((resolve) => {
     if (!dataUrl.startsWith('data:image/')) {
       resolve(dataUrl);
@@ -135,12 +136,14 @@ const compressImageDataUrl = (dataUrl, maxWidth = 1400) => {
       canvas.height = Math.round(img.height * scale);
       const ctx = canvas.getContext('2d');
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      resolve(canvas.toDataURL('image/jpeg', 0.82));
+      resolve(canvas.toDataURL('image/jpeg', 0.80));
     };
     img.onerror = () => resolve(dataUrl);
     img.src = dataUrl;
   });
 };
+
+const sleepMs = (ms) => new Promise(res => setTimeout(res, ms));
 
 const formatDateTimeBR = (isoOrTs) => {
   if (!isoOrTs) return '-';
@@ -189,12 +192,15 @@ export default function App() {
   const [usersModalOpen, setUsersModalOpen] = useState(false);
   const [neuralModalOpen, setNeuralModalOpen] = useState(false);
 
+  // Estados da câmera com controle de zoom (evita zoom excessivo em notas de perto)
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraError, setCameraError] = useState('');
+  const [zoomRange, setZoomRange] = useState({ supported: false, min: 1, max: 1, step: 0.1, current: 1 });
   const videoElementRef = useRef(null);
   const mediaStreamRef = useRef(null);
   const galleryInputRef = useRef(null);
+  const nativeCameraInputRef = useRef(null);
 
   const [isScanning, setIsScanning] = useState(false);
   const [scanMessage, setScanMessage] = useState('');
@@ -226,7 +232,7 @@ export default function App() {
     statusRetornoEscritorio: 'PENDENTE',
     dataRetornoEscritorio: '',
     recebidoPorEscritorio: '',
-    statusDivergenciaCompras: 'NENHUMA', // NENHUMA | PENDENTE_COMPRAS | APROVADA_COMPRAS
+    statusDivergenciaCompras: 'NENHUMA',
     historico: [],
     observacoes: '',
     anexoPreview: ''
@@ -363,29 +369,66 @@ export default function App() {
     setCameraReady(false);
   };
 
+  // Abre a câmera sem forçar corte 9:16 (usa campo de visão total 4:3 da lente a 15-20cm)
   const openLiveCamera = async () => {
     setCameraError('');
     setCameraReady(false);
+    setZoomRange({ supported: false, min: 1, max: 1, step: 0.1, current: 1 });
     setIsCameraOpen(true);
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { ideal: 'environment' },
-          width: { ideal: 1080 },
-          height: { ideal: 1920 }
+          zoom: true
         },
         audio: false
       });
+
       mediaStreamRef.current = stream;
+
+      // Verifica suporte a ajuste de zoom e força o menor zoom disponível (mais aberto p/ 15-20cm)
+      const [videoTrack] = stream.getVideoTracks();
+      if (videoTrack && typeof videoTrack.getCapabilities === 'function') {
+        const caps = videoTrack.getCapabilities();
+        const advConstraints = {};
+
+        if (caps.focusMode && caps.focusMode.includes('continuous')) {
+          advConstraints.focusMode = 'continuous';
+        }
+
+        if (caps.zoom) {
+          const minZ = caps.zoom.min || 1;
+          const maxZ = Math.min(caps.zoom.max || 3, 4);
+          const stepZ = caps.zoom.step || 0.1;
+          advConstraints.zoom = minZ;
+          setZoomRange({ supported: true, min: minZ, max: maxZ, step: stepZ, current: minZ });
+        }
+
+        if (Object.keys(advConstraints).length > 0) {
+          await videoTrack.applyConstraints({ advanced: [advConstraints] }).catch(() => {});
+        }
+      }
+
       if (videoElementRef.current) {
         videoElementRef.current.srcObject = stream;
         await videoElementRef.current.play().catch(() => {});
         setCameraReady(true);
       }
     } catch (err) {
-      console.warn('Erro câmara:', err);
-      setCameraError('Permissão de câmara bloqueada ou indisponível. Use o botão Galeria.');
+      console.warn('Erro câmera:', err);
+      setCameraError('Permissão de câmera bloqueada ou indisponível. Use o botão Câmera Nativa ou Galeria.');
+    }
+  };
+
+  const handleCameraZoomChange = async (newZoomVal) => {
+    const z = parseFloat(newZoomVal);
+    setZoomRange(prev => ({ ...prev, current: z }));
+    if (mediaStreamRef.current) {
+      const [track] = mediaStreamRef.current.getVideoTracks();
+      if (track && typeof track.applyConstraints === 'function') {
+        await track.applyConstraints({ advanced: [{ zoom: z }] }).catch(() => {});
+      }
     }
   };
 
@@ -406,11 +449,11 @@ export default function App() {
     const video = videoElementRef.current;
     if (!video) return;
     const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth || 1080;
-    canvas.height = video.videoHeight || 1440;
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 960;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.84);
     closeLiveCamera();
     processDataUrlWithGemini(dataUrl, 'image/jpeg');
   };
@@ -456,12 +499,12 @@ export default function App() {
   };
 
   // ==========================================================================
-  // LEITURA DE NOTA FISCAL COM EXTRAÇÃO DE ITENS INDIVIDUAIS E CHAVE (v2.2)
+  // LEITURA DE NOTA FISCAL COM RETRY AUTOMÁTICO CONTRA ALTA DEMANDA (v2.3)
   // ==========================================================================
   const processDataUrlWithGemini = async (rawDataUrl, mimeType) => {
     setIsScanning(true);
     setLastAiError('');
-    setScanMessage('Extraindo itens, chave de acesso e dados da NF...');
+    setScanMessage('Otimizando imagem e lendo Nota Fiscal...');
 
     try {
       const optimizedUrl = await compressImageDataUrl(rawDataUrl);
@@ -501,6 +544,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
 
       outerLoop:
       for (const keyToUse of candidateKeys) {
+        // Prioriza a geração 3.8 e aliases ativos (filtra modelos 2.5/2.0 descontinuados p/ novos usuários)
         let modelsToTry = ['gemini-3.8-flash', 'gemini-flash-latest'];
         try {
           const listRes = await fetch(
@@ -512,10 +556,25 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
             const available = (listJson.models || [])
               .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
               .map(m => m.name.replace('models/', ''))
-              .filter(name => name.includes('gemini') && !name.includes('embedding') && !name.includes('aqa') && !name.includes('tts'));
+              .filter(name => 
+                name.includes('gemini') && 
+                !name.includes('embedding') && 
+                !name.includes('aqa') && 
+                !name.includes('tts') &&
+                !name.includes('2.5') &&
+                !name.includes('2.0') &&
+                !name.includes('1.5')
+              );
 
             available.sort((a, b) => {
-              const score = (n) => (n.includes('3.8-flash') ? 5 : n.includes('2.5-flash') ? 4 : n.includes('2.0-flash') ? 3 : n.includes('flash') ? 2 : 1);
+              const score = (n) => (
+                n === 'gemini-3.8-flash' ? 10 :
+                n.includes('3.8-flash') ? 9 :
+                n.includes('3.8') ? 8 :
+                n.includes('3.') ? 7 :
+                n === 'gemini-flash-latest' ? 6 :
+                n.includes('flash') ? 5 : 1
+              );
               return score(b) - score(a);
             });
 
@@ -524,50 +583,71 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
             }
           }
         } catch (e) {
-          errorsLog.push(`[Rede ListModels]: ${e.message}`);
+          console.warn('ListModels ignorado:', e);
         }
 
         for (const modelName of modelsToTry) {
-          try {
-            const response = await fetch(
-              `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(keyToUse)}`,
-              {
-                method: 'POST',
-                headers: { 
-                  'Content-Type': 'application/json',
-                  'x-goog-api-key': keyToUse
-                },
-                body: JSON.stringify({
-                  contents: [{
-                    parts: [
-                      { text: prompt },
-                      { inlineData: { mimeType: finalMime, data: base64Data } }
-                    ]
-                  }]
-                })
+          // Até 3 tentativas no mesmo modelo caso o servidor da Google dê "high demand" (503 / 429)
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+              if (attempt > 1) {
+                setScanMessage(`Servidor ocupado, tentando novamente (${attempt}/3)...`);
+                await sleepMs(1800 * (attempt - 1));
               }
-            );
 
-            const resJson = await response.json();
+              const response = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(keyToUse)}`,
+                {
+                  method: 'POST',
+                  headers: { 
+                    'Content-Type': 'application/json',
+                    'x-goog-api-key': keyToUse
+                  },
+                  body: JSON.stringify({
+                    contents: [{
+                      parts: [
+                        { text: prompt },
+                        { inlineData: { mimeType: finalMime, data: base64Data } }
+                      ]
+                    }]
+                  })
+                }
+              );
 
-            if (!response.ok) {
-              const msg = resJson?.error?.message || `HTTP ${response.status}`;
-              errorsLog.push(`[${modelName}]: ${msg}`);
-              continue;
+              const resJson = await response.json();
+
+              if (!response.ok) {
+                const msg = resJson?.error?.message || `HTTP ${response.status}`;
+                const isHighDemand = 
+                  response.status === 503 || 
+                  response.status === 429 || 
+                  msg.toLowerCase().includes('high demand') || 
+                  msg.toLowerCase().includes('overloaded') ||
+                  msg.toLowerCase().includes('try again later');
+
+                if (isHighDemand && attempt < 3) {
+                  continue; // Espera e tenta de novo no mesmo modelo!
+                }
+
+                errorsLog.push(`[${modelName}]: ${msg}`);
+                break; // Vai para o próximo modelo
+              }
+
+              let rawText = resJson?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+              if (!rawText) {
+                errorsLog.push(`[${modelName}]: Resposta vazia`);
+                break;
+              }
+
+              const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+              const cleanJson = jsonMatch ? jsonMatch[0] : rawText;
+              parsedData = JSON.parse(cleanJson);
+              break outerLoop;
+            } catch (innerErr) {
+              if (attempt === 3) {
+                errorsLog.push(`[${modelName}]: ${innerErr.message}`);
+              }
             }
-
-            let rawText = resJson?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-            if (!rawText) {
-              errorsLog.push(`[${modelName}]: Resposta vazia`);
-              continue;
-            }
-
-            const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-            const cleanJson = jsonMatch ? jsonMatch[0] : rawText;
-            parsedData = JSON.parse(cleanJson);
-            break outerLoop;
-          } catch (innerErr) {
-            errorsLog.push(`[${modelName}]: ${innerErr.message}`);
           }
         }
       }
@@ -640,6 +720,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
     const reader = new FileReader();
     reader.onload = () => processDataUrlWithGemini(reader.result, file.type || 'image/jpeg');
     reader.readAsDataURL(file);
+    e.target.value = '';
   };
 
   // Funções para manipular itens dentro do formulário de criação/edição
@@ -1029,7 +1110,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
     return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : d;
   };
 
-  // Prepara a lista de itens ao abrir o modal do Almoxarifado (mesmo para NFs antigas)
+  // Prepara a lista de itens ao abrir o modal do Almoxarifado
   const openAlmoxModalForItem = (item) => {
     const baseItens = Array.isArray(item.itens) && item.itens.length > 0
       ? item.itens.map(it => ({
@@ -1064,7 +1145,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
               <FileText className="w-6 h-6" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-slate-800 leading-tight">Controle de NFs v2.2</h1>
+              <h1 className="text-lg font-bold text-slate-800 leading-tight">Controle de NFs v2.3</h1>
               <p className="text-xs text-slate-500">Selecione o seu perfil para entrar</p>
             </div>
           </div>
@@ -1146,7 +1227,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
             </button>
             <div className="truncate">
               <div className="flex items-center gap-1.5">
-                <span className="font-bold text-sm text-slate-800 truncate">Controle NFs <span className="text-[10px] text-emerald-600 font-mono">v2.2</span></span>
+                <span className="font-bold text-sm text-slate-800 truncate">Controle NFs <span className="text-[10px] text-emerald-600 font-mono">v2.3</span></span>
                 <span className="px-2 py-0.5 text-[11px] font-semibold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 truncate">
                   {loggedUser.name}
                 </span>
@@ -1713,7 +1794,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
           <div className="bg-white rounded-2xl max-w-2xl w-full p-4 shadow-xl mb-20">
             <div className="flex items-center justify-between pb-3 border-b border-slate-200">
               <h2 className="text-sm font-bold text-slate-800">
-                {editingId ? 'Editar Registro de NF' : 'Novo Despacho de Mercadoria (v2.2)'}
+                {editingId ? 'Editar Registro de NF' : 'Novo Despacho de Mercadoria (v2.3)'}
               </h2>
               <button onClick={resetForm} className="p-1 rounded-lg text-slate-400 hover:bg-slate-100">
                 <X className="w-5 h-5" />
@@ -1728,7 +1809,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
                   disabled={isScanning}
                   className="py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl text-xs flex items-center justify-center gap-2 shadow-sm"
                 >
-                  <Camera className="w-4 h-4" /> Tirar Foto
+                  <Camera className="w-4 h-4" /> Tirar Foto (15-20cm)
                 </button>
                 <button
                   type="button"
@@ -1746,6 +1827,15 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
                 onChange={handleFileUpload}
                 className="hidden"
               />
+              {/* Input para câmera nativa do celular (suporta lente ultra-wide/macro nativa do aparelho) */}
+              <input
+                ref={nativeCameraInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={handleFileUpload}
+                className="hidden"
+              />
               {isScanning && (
                 <div className="mt-2 flex items-center justify-center gap-2 text-xs font-semibold text-emerald-800">
                   <RefreshCw className="w-4 h-4 animate-spin" /> {scanMessage}
@@ -1753,7 +1843,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
               )}
               {lastAiError && (
                 <div className="mt-2 text-[11px] text-red-700 bg-red-50 border border-red-200 rounded-lg p-2">
-                  <strong>Diagnóstico v2.2:</strong> {lastAiError}
+                  <strong>Diagnóstico v2.3:</strong> {lastAiError}
                 </div>
               )}
               {neuralSuggestionBanner && (
@@ -1943,36 +2033,57 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
         </div>
       )}
 
-      {/* MODAL CÂMERA */}
+      {/* MODAL CÂMERA OTIMIZADO PARA CURTA DISTÂNCIA (15-20CM SEM ZOOM FORÇADO) */}
       {isCameraOpen && (
         <div className="fixed inset-0 z-50 bg-slate-950/90 flex items-start justify-center p-2 pt-3 overflow-y-auto">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-sm p-3 text-white space-y-3">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-sm p-3 text-white space-y-2.5">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold flex items-center gap-1.5 text-emerald-400">
-                <Camera className="w-4 h-4" /> Posição Vertical (Nota Fiscal)
+                <Camera className="w-4 h-4" /> Enquadramento Aberto (15 a 20 cm)
               </span>
               <button onClick={closeLiveCamera} className="p-1 rounded-lg text-slate-400 hover:text-white">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="relative w-full aspect-[3/4] bg-black rounded-xl overflow-hidden border-2 border-emerald-500/60">
+            <div className="relative w-full aspect-[3/4] bg-black rounded-xl overflow-hidden border-2 border-emerald-500/60 flex items-center justify-center">
+              {/* object-contain evita que o navegador corte as bordas e dê zoom na nota */}
               <video
                 ref={setVideoRef}
                 autoPlay
                 playsInline
                 muted
-                className="w-full h-full object-cover"
+                className="w-full h-full object-contain"
               />
-              <div className="absolute inset-3 border-2 border-dashed border-white/60 rounded-lg pointer-events-none flex flex-col justify-between p-2 text-center">
-                <span className="bg-black/60 text-[10px] text-emerald-300 px-2 py-0.5 rounded mx-auto">
-                  Topo da Nota Fiscal (Celular em pé)
+              <div className="absolute inset-2 border border-dashed border-emerald-400/70 rounded-lg pointer-events-none flex flex-col justify-between p-1.5 text-center">
+                <span className="bg-black/65 text-[10px] text-emerald-300 px-2 py-0.5 rounded mx-auto">
+                  Posicione de 15 a 20 cm da Nota Fiscal
                 </span>
-                <span className="bg-black/60 text-[10px] text-white/80 px-2 py-0.5 rounded mx-auto">
-                  Base da Nota Fiscal
+                <span className="bg-black/65 text-[10px] text-white/80 px-2 py-0.5 rounded mx-auto">
+                  Sem corte lateral • Campo de visão total
                 </span>
               </div>
             </div>
+
+            {/* Controle manual de Zoom caso o aparelho suporte */}
+            {zoomRange.supported && (
+              <div className="flex items-center gap-2 bg-slate-800/90 px-3 py-1.5 rounded-xl text-xs">
+                <ZoomIn className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span className="text-[11px] text-slate-300 shrink-0">Zoom:</span>
+                <input
+                  type="range"
+                  min={zoomRange.min}
+                  max={zoomRange.max}
+                  step={zoomRange.step}
+                  value={zoomRange.current}
+                  onChange={(e) => handleCameraZoomChange(e.target.value)}
+                  className="w-full accent-emerald-500"
+                />
+                <span className="font-mono text-[11px] text-emerald-300 w-9 text-right">
+                  {Number(zoomRange.current).toFixed(1)}x
+                </span>
+              </div>
+            )}
 
             {cameraError && (
               <p className="text-xs text-amber-300 text-center bg-amber-950/60 p-2 rounded-lg">{cameraError}</p>
@@ -1991,11 +2102,11 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
                 type="button"
                 onClick={() => {
                   closeLiveCamera();
-                  galleryInputRef.current?.click();
+                  nativeCameraInputRef.current?.click();
                 }}
-                className="py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold rounded-xl text-xs flex items-center justify-center gap-1.5 border border-slate-600"
+                className="py-3 bg-slate-800 hover:bg-slate-700 text-emerald-300 font-semibold rounded-xl text-xs flex items-center justify-center gap-1.5 border border-emerald-500/40"
               >
-                <ImageIcon className="w-4 h-4" /> Galeria
+                <Camera className="w-4 h-4" /> Câmera Nativa (0.5x)
               </button>
             </div>
           </div>
