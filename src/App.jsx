@@ -322,8 +322,8 @@ export default function App() {
         setCameraReady(true);
       }
     } catch (err) {
-      console.warn('Erro câmera:', err);
-      setCameraError('Permissão de câmera bloqueada ou indisponível. Use o botão Galeria.');
+      console.warn('Erro câmara:', err);
+      setCameraError('Permissão de câmara bloqueada ou indisponível. Use o botão Galeria.');
     }
   };
 
@@ -394,7 +394,7 @@ export default function App() {
   };
 
   // ==========================================================================
-  // LEITURA DE NOTA FISCAL COM DESCOBERTA AUTOMÁTICA DE MODELOS (v2.0)
+  // LEITURA DE NOTA FISCAL ATUALIZADA PARA MODELO GEMINI 3.8 FLASH (v2.1)
   // ==========================================================================
   const processDataUrlWithGemini = async (rawDataUrl, mimeType) => {
     setIsScanning(true);
@@ -428,7 +428,7 @@ export default function App() {
 
       outerLoop:
       for (const keyToUse of candidateKeys) {
-        let modelsToTry = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest'];
+        let modelsToTry = ['gemini-3.8-flash', 'gemini-flash-latest'];
         try {
           const listRes = await fetch(
             `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(keyToUse)}`,
@@ -442,7 +442,7 @@ export default function App() {
               .filter(name => name.includes('gemini') && !name.includes('embedding') && !name.includes('aqa'));
 
             available.sort((a, b) => {
-              const score = (n) => (n.includes('2.5-flash') ? 4 : n.includes('2.0-flash') ? 3 : n.includes('flash') ? 2 : 1);
+              const score = (n) => (n.includes('3.8-flash') ? 5 : n.includes('2.5-flash') ? 4 : n.includes('2.0-flash') ? 3 : n.includes('flash') ? 2 : 1);
               return score(b) - score(a);
             });
 
@@ -555,16 +555,16 @@ export default function App() {
       const payload = {
         ...formData,
         valorTotal: parseFloat(String(formData.valorTotal).replace(',', '.')) || 0,
-        lancadoPor: loggedUser?.name || 'Usuário',
+        lancadoPor: loggedUser?.name || 'Utilizador',
         updatedAt: Date.now()
       };
 
       if (editingId) {
         await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'remessas_nf', editingId), payload);
-        showToast('Registro atualizado!');
+        showToast('Registo atualizado!');
       } else {
         await addDoc(colRef, { ...payload, createdAt: Date.now() });
-        showToast('Despacho registrado com sucesso!');
+        showToast('Despacho registado com sucesso!');
       }
 
       await learnFromSavedDispatch(formData);
@@ -646,7 +646,7 @@ export default function App() {
     if (!currentPermissions.isAdmin) return;
     try {
       await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'remessas_nf', id));
-      showToast('Registro excluído.');
+      showToast('Registo excluído.');
     } catch {
       showToast('Erro ao excluir.', 'error');
     }
@@ -677,7 +677,7 @@ export default function App() {
       active: true
     });
     setNewUserForm({ name: '', role: 'compras', pin: '1236' });
-    showToast('Usuário cadastrado!');
+    showToast('Utilizador cadastrado!');
   };
 
   const handleDeleteUser = async (uId) => {
@@ -686,7 +686,7 @@ export default function App() {
       return;
     }
     await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'usuarios_sistema', uId));
-    showToast('Usuário removido.');
+    showToast('Utilizador removido.');
   };
 
   const stats = useMemo(() => {
@@ -728,7 +728,7 @@ export default function App() {
               <FileText className="w-6 h-6" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-slate-800 leading-tight">Controle de NFs v2.0</h1>
+              <h1 className="text-lg font-bold text-slate-800 leading-tight">Controle de NFs v2.1</h1>
               <p className="text-xs text-slate-500">Selecione o seu perfil para entrar</p>
             </div>
           </div>
@@ -736,7 +736,7 @@ export default function App() {
           <form onSubmit={handleProfileLogin} className="space-y-4">
             <div>
               <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
-                Usuário / Perfil
+                Utilizador / Perfil
               </label>
               <select
                 value={selectedLoginUserId}
@@ -803,14 +803,14 @@ export default function App() {
           <div className="flex items-center gap-2 min-w-0">
             <button
               onClick={toggleFullScreen}
-              title="Tela Inteira"
+              title="Ecrã Inteiro"
               className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 shrink-0"
             >
               {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
             </button>
             <div className="truncate">
               <div className="flex items-center gap-1.5">
-                <span className="font-bold text-sm text-slate-800 truncate">Controle NFs <span className="text-[10px] text-emerald-600 font-mono">v2.0</span></span>
+                <span className="font-bold text-sm text-slate-800 truncate">Controle NFs <span className="text-[10px] text-emerald-600 font-mono">v2.1</span></span>
                 <span className="px-2 py-0.5 text-[11px] font-semibold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 truncate">
                   {loggedUser.name}
                 </span>
@@ -824,7 +824,7 @@ export default function App() {
                 <button
                   onClick={() => setUsersModalOpen(true)}
                   className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium flex items-center gap-1"
-                  title="Gerenciar Usuários"
+                  title="Gerir Utilizadores"
                 >
                   <Users className="w-4 h-4" />
                   <span className="hidden md:inline">Usuários</span>
@@ -862,7 +862,7 @@ export default function App() {
 
             <button
               onClick={handleLogout}
-              title="Trocar Usuário / Sair"
+              title="Trocar Utilizador / Sair"
               className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600"
             >
               <LogOut className="w-4 h-4" />
@@ -943,7 +943,7 @@ export default function App() {
         ) : filteredRemessas.length === 0 ? (
           <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center space-y-2">
             <FileText className="w-8 h-8 text-slate-400 mx-auto" />
-            <p className="text-sm font-semibold text-slate-700">Nenhuma Nota Fiscal registrada</p>
+            <p className="text-sm font-semibold text-slate-700">Nenhuma Nota Fiscal registada</p>
             <p className="text-xs text-slate-500">Clique em "+ Nova NF" no topo para fotografar ou anexar a primeira nota.</p>
           </div>
         ) : (
@@ -1184,7 +1184,7 @@ export default function App() {
           <div className="bg-white rounded-2xl max-w-2xl w-full p-4 shadow-xl mb-20">
             <div className="flex items-center justify-between pb-3 border-b border-slate-200">
               <h2 className="text-sm font-bold text-slate-800">
-                {editingId ? 'Editar Registro de NF' : 'Novo Despacho de Mercadoria (v2.0)'}
+                {editingId ? 'Editar Registo de NF' : 'Novo Despacho de Mercadoria (v2.1)'}
               </h2>
               <button onClick={resetForm} className="p-1 rounded-lg text-slate-400 hover:bg-slate-100">
                 <X className="w-5 h-5" />
@@ -1224,7 +1224,7 @@ export default function App() {
               )}
               {lastAiError && (
                 <div className="mt-2 text-[11px] text-red-700 bg-red-50 border border-red-200 rounded-lg p-2">
-                  <strong>Diagnóstico v2.0:</strong> {lastAiError}
+                  <strong>Diagnóstico v2.1:</strong> {lastAiError}
                 </div>
               )}
               {neuralSuggestionBanner && (
@@ -1363,7 +1363,7 @@ export default function App() {
               />
               <div className="absolute inset-3 border-2 border-dashed border-white/60 rounded-lg pointer-events-none flex flex-col justify-between p-2 text-center">
                 <span className="bg-black/60 text-[10px] text-emerald-300 px-2 py-0.5 rounded mx-auto">
-                  Topo da Nota Fiscal (Celular em pé)
+                  Topo da Nota Fiscal (Telemóvel em pé)
                 </span>
                 <span className="bg-black/60 text-[10px] text-white/80 px-2 py-0.5 rounded mx-auto">
                   Base da Nota Fiscal
@@ -1496,7 +1496,7 @@ export default function App() {
           <div className="bg-white rounded-2xl max-w-lg w-full p-4 shadow-xl space-y-4">
             <div className="flex items-center justify-between border-b pb-2">
               <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
-                <Users className="w-4 h-4 text-emerald-600" /> Cadastro de Usuários e Senhas
+                <Users className="w-4 h-4 text-emerald-600" /> Cadastro de Utilizadores e Senhas
               </h3>
               <button onClick={() => setUsersModalOpen(false)}><X className="w-5 h-5 text-slate-400" /></button>
             </div>
@@ -1614,7 +1614,7 @@ export default function App() {
             <Trash2 className="w-8 h-8 text-red-600 mx-auto" />
             <h3 className="text-sm font-bold text-slate-800">Zerar Base de Dados?</h3>
             <p className="text-xs text-slate-600">
-              Todos os {remessas.length} registros serão apagados permanentemente.
+              Todos os {remessas.length} registos serão apagados permanentemente.
             </p>
             <div className="flex justify-center gap-2 pt-2 text-xs">
               <button onClick={() => setClearDbModalOpen(false)} className="px-4 py-2 border rounded-lg">
