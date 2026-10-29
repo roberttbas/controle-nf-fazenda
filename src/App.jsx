@@ -41,7 +41,10 @@ import {
   Copy,
   Key,
   Package,
-  ZoomIn
+  Filter,
+  FileSpreadsheet,
+  Printer,
+  Layers
 } from 'lucide-react';
 
 // ============================================================================
@@ -121,7 +124,7 @@ const SETORES_FAZENDA = [
   'Administrativo / Sede'
 ];
 
-// Comprime a imagem antes de enviar à IA para leitura rápida e leve no 4G
+// Comprime a imagem antes de enviar à IA para leitura rápida e leve
 const compressImageDataUrl = (dataUrl, maxWidth = 1350) => {
   return new Promise((resolve) => {
     if (!dataUrl.startsWith('data:image/')) {
@@ -143,6 +146,15 @@ const compressImageDataUrl = (dataUrl, maxWidth = 1350) => {
   });
 };
 
+const readFileAsDataUrl = (file) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = (err) => reject(err);
+    reader.readAsDataURL(file);
+  });
+};
+
 const sleepMs = (ms) => new Promise(res => setTimeout(res, ms));
 
 const formatDateTimeBR = (isoOrTs) => {
@@ -156,6 +168,12 @@ const formatDateTimeBR = (isoOrTs) => {
     hour: '2-digit',
     minute: '2-digit'
   });
+};
+
+const formatDateBR = (d) => {
+  if (!d) return '-';
+  const parts = String(d).split('-');
+  return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : d;
 };
 
 export default function App() {
@@ -192,24 +210,39 @@ export default function App() {
   const [usersModalOpen, setUsersModalOpen] = useState(false);
   const [neuralModalOpen, setNeuralModalOpen] = useState(false);
 
-  // Estados da câmera com controle de zoom (evita zoom excessivo em notas de perto)
-  const [isCameraOpen, setIsCameraOpen] = useState(false);
-  const [cameraReady, setCameraReady] = useState(false);
-  const [cameraError, setCameraError] = useState('');
-  const [zoomRange, setZoomRange] = useState({ supported: false, min: 1, max: 1, step: 0.1, current: 1 });
-  const videoElementRef = useRef(null);
-  const mediaStreamRef = useRef(null);
+  // Referências para Câmera Nativa e Galeria (Até 20 arquivos)
   const galleryInputRef = useRef(null);
   const nativeCameraInputRef = useRef(null);
 
+  // Estados de leitura IA individual e em Lote (até 20 notas)
   const [isScanning, setIsScanning] = useState(false);
   const [scanMessage, setScanMessage] = useState('');
   const [lastAiError, setLastAiError] = useState('');
   const [neuralSuggestionBanner, setNeuralSuggestionBanner] = useState('');
   const [toast, setToast] = useState(null);
 
+  const [batchQueueModalOpen, setBatchQueueModalOpen] = useState(false);
+  const [batchItems, setBatchItems] = useState([]);
+  const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0, active: false });
+  const [batchGlobalConfig, setBatchGlobalConfig] = useState({
+    setorDestino: 'Almoxarifado Central',
+    portadorMotorista: '',
+    foiComNota: 'SIM'
+  });
+
+  // Estados de Busca Rápida e Aba de Pesquisa Avançada
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('TODOS');
+  const [showAdvancedSearch, setShowAdvancedSearch] = useState(false);
+  const [advFilters, setAdvFilters] = useState({
+    tipoData: 'EMISSAO', // EMISSAO | ENVIO | ALMOX
+    dataInicio: '',
+    dataFim: '',
+    numeroNF: '',
+    fornecedor: '',
+    itemPeca: '',
+    setor: 'TODOS'
+  });
 
   const todayStr = new Date().toISOString().split('T')[0];
   const [formData, setFormData] = useState({
@@ -361,110 +394,13 @@ export default function App() {
     localStorage.removeItem('nf_logged_user');
   };
 
-  const stopCameraStream = () => {
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach(track => track.stop());
-      mediaStreamRef.current = null;
-    }
-    setCameraReady(false);
-  };
-
-  // Abre a câmera sem forçar corte 9:16 (usa campo de visão total 4:3 da lente a 15-20cm)
-  const openLiveCamera = async () => {
-    setCameraError('');
-    setCameraReady(false);
-    setZoomRange({ supported: false, min: 1, max: 1, step: 0.1, current: 1 });
-    setIsCameraOpen(true);
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: 'environment' },
-          zoom: true
-        },
-        audio: false
-      });
-
-      mediaStreamRef.current = stream;
-
-      // Verifica suporte a ajuste de zoom e força o menor zoom disponível (mais aberto p/ 15-20cm)
-      const [videoTrack] = stream.getVideoTracks();
-      if (videoTrack && typeof videoTrack.getCapabilities === 'function') {
-        const caps = videoTrack.getCapabilities();
-        const advConstraints = {};
-
-        if (caps.focusMode && caps.focusMode.includes('continuous')) {
-          advConstraints.focusMode = 'continuous';
-        }
-
-        if (caps.zoom) {
-          const minZ = caps.zoom.min || 1;
-          const maxZ = Math.min(caps.zoom.max || 3, 4);
-          const stepZ = caps.zoom.step || 0.1;
-          advConstraints.zoom = minZ;
-          setZoomRange({ supported: true, min: minZ, max: maxZ, step: stepZ, current: minZ });
-        }
-
-        if (Object.keys(advConstraints).length > 0) {
-          await videoTrack.applyConstraints({ advanced: [advConstraints] }).catch(() => {});
-        }
-      }
-
-      if (videoElementRef.current) {
-        videoElementRef.current.srcObject = stream;
-        await videoElementRef.current.play().catch(() => {});
-        setCameraReady(true);
-      }
-    } catch (err) {
-      console.warn('Erro câmera:', err);
-      setCameraError('Permissão de câmera bloqueada ou indisponível. Use o botão Câmera Nativa ou Galeria.');
-    }
-  };
-
-  const handleCameraZoomChange = async (newZoomVal) => {
-    const z = parseFloat(newZoomVal);
-    setZoomRange(prev => ({ ...prev, current: z }));
-    if (mediaStreamRef.current) {
-      const [track] = mediaStreamRef.current.getVideoTracks();
-      if (track && typeof track.applyConstraints === 'function') {
-        await track.applyConstraints({ advanced: [{ zoom: z }] }).catch(() => {});
-      }
-    }
-  };
-
-  const setVideoRef = (node) => {
-    videoElementRef.current = node;
-    if (node && mediaStreamRef.current) {
-      node.srcObject = mediaStreamRef.current;
-      node.play().then(() => setCameraReady(true)).catch(() => {});
-    }
-  };
-
-  const closeLiveCamera = () => {
-    stopCameraStream();
-    setIsCameraOpen(false);
-  };
-
-  const capturePhotoFromVideo = () => {
-    const video = videoElementRef.current;
-    if (!video) return;
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth || 1280;
-    canvas.height = video.videoHeight || 960;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.84);
-    closeLiveCamera();
-    processDataUrlWithGemini(dataUrl, 'image/jpeg');
-  };
-
   const applyNeuralMemoryToSupplier = (fornecedorNome, cnpj) => {
     const key = (cnpj || fornecedorNome || '').replace(/\D/g, '') || (fornecedorNome || '').toUpperCase().trim();
     if (!key) return {};
     const learned = neuralMemory.supplierLearnings?.[key];
     if (learned) {
-      setNeuralSuggestionBanner(`Memória Neural: Fornecedor reconhecido! Setor (${learned.setorDestino}) preenchido.`);
       return {
+        recognized: true,
         setorDestino: learned.setorDestino || 'Almoxarifado Central',
         portadorMotorista: learned.portadorMotorista || ''
       };
@@ -499,24 +435,19 @@ export default function App() {
   };
 
   // ==========================================================================
-  // LEITURA DE NOTA FISCAL COM RETRY AUTOMÁTICO CONTRA ALTA DEMANDA (v2.3)
+  // MOTOR DE EXTRAÇÃO GEMINI IA (USADO TANTO PARA 1 FOTO QUANTO PARA LOTE DE 20)
   // ==========================================================================
-  const processDataUrlWithGemini = async (rawDataUrl, mimeType) => {
-    setIsScanning(true);
-    setLastAiError('');
-    setScanMessage('Otimizando imagem e lendo Nota Fiscal...');
+  const extractInvoiceFromDataUrl = async (rawDataUrl, mimeType, onStatusUpdate) => {
+    const optimizedUrl = await compressImageDataUrl(rawDataUrl);
+    const base64Data = optimizedUrl.split(',')[1];
+    const finalMime = optimizedUrl.startsWith('data:image/jpeg') ? 'image/jpeg' : mimeType;
 
-    try {
-      const optimizedUrl = await compressImageDataUrl(rawDataUrl);
-      const base64Data = optimizedUrl.split(',')[1];
-      const finalMime = optimizedUrl.startsWith('data:image/jpeg') ? 'image/jpeg' : mimeType;
+    const savedKey = (neuralMemory.customGeminiKey || '').trim();
+    const candidateKeys = [];
+    if (savedKey) candidateKeys.push(savedKey);
+    if (!candidateKeys.includes(firebaseConfig.apiKey)) candidateKeys.push(firebaseConfig.apiKey);
 
-      const savedKey = (neuralMemory.customGeminiKey || '').trim();
-      const candidateKeys = [];
-      if (savedKey) candidateKeys.push(savedKey);
-      if (!candidateKeys.includes(firebaseConfig.apiKey)) candidateKeys.push(firebaseConfig.apiKey);
-
-      const prompt = `Você é um especialista em leitura de Notas Fiscais brasileiras (DANFE / NF-e).
+    const prompt = `Você é um especialista em leitura de Notas Fiscais brasileiras (DANFE / NF-e).
 Extraia todos os dados da Nota Fiscal na imagem/PDF, incluindo a CHAVE DE ACESSO de 44 dígitos (remova espaços ou pontos da chave) e a LISTA INDIVIDUAL DE PRODUTOS/ITENS da nota.
 Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente esta estrutura:
 {
@@ -539,171 +470,196 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
   ]
 }`;
 
-      let parsedData = null;
-      const errorsLog = [];
+    let parsedData = null;
+    const errorsLog = [];
 
-      outerLoop:
-      for (const keyToUse of candidateKeys) {
-        // Prioriza a geração 3.8 e aliases ativos (filtra modelos 2.5/2.0 descontinuados p/ novos usuários)
-        let modelsToTry = ['gemini-3.8-flash', 'gemini-flash-latest'];
-        try {
-          const listRes = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(keyToUse)}`,
-            { headers: { 'x-goog-api-key': keyToUse } }
-          );
-          if (listRes.ok) {
-            const listJson = await listRes.json();
-            const available = (listJson.models || [])
-              .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
-              .map(m => m.name.replace('models/', ''))
-              .filter(name => 
-                name.includes('gemini') && 
-                !name.includes('embedding') && 
-                !name.includes('aqa') && 
-                !name.includes('tts') &&
-                !name.includes('2.5') &&
-                !name.includes('2.0') &&
-                !name.includes('1.5')
-              );
+    outerLoop:
+    for (const keyToUse of candidateKeys) {
+      let modelsToTry = ['gemini-3.8-flash', 'gemini-flash-latest'];
+      try {
+        const listRes = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(keyToUse)}`,
+          { headers: { 'x-goog-api-key': keyToUse } }
+        );
+        if (listRes.ok) {
+          const listJson = await listRes.json();
+          const available = (listJson.models || [])
+            .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
+            .map(m => m.name.replace('models/', ''))
+            .filter(name => 
+              name.includes('gemini') && 
+              !name.includes('embedding') && 
+              !name.includes('aqa') && 
+              !name.includes('tts') &&
+              !name.includes('2.5') &&
+              !name.includes('2.0') &&
+              !name.includes('1.5')
+            );
 
-            available.sort((a, b) => {
-              const score = (n) => (
-                n === 'gemini-3.8-flash' ? 10 :
-                n.includes('3.8-flash') ? 9 :
-                n.includes('3.8') ? 8 :
-                n.includes('3.') ? 7 :
-                n === 'gemini-flash-latest' ? 6 :
-                n.includes('flash') ? 5 : 1
-              );
-              return score(b) - score(a);
-            });
+          available.sort((a, b) => {
+            const score = (n) => (
+              n === 'gemini-3.8-flash' ? 10 :
+              n.includes('3.8-flash') ? 9 :
+              n.includes('3.8') ? 8 :
+              n.includes('3.') ? 7 :
+              n === 'gemini-flash-latest' ? 6 :
+              n.includes('flash') ? 5 : 1
+            );
+            return score(b) - score(a);
+          });
 
-            if (available.length > 0) {
-              modelsToTry = available.slice(0, 4);
-            }
+          if (available.length > 0) {
+            modelsToTry = available.slice(0, 4);
           }
-        } catch (e) {
-          console.warn('ListModels ignorado:', e);
         }
+      } catch (e) {
+        console.warn('ListModels ignorado:', e);
+      }
 
-        for (const modelName of modelsToTry) {
-          // Até 3 tentativas no mesmo modelo caso o servidor da Google dê "high demand" (503 / 429)
-          for (let attempt = 1; attempt <= 3; attempt++) {
-            try {
-              if (attempt > 1) {
-                setScanMessage(`Servidor ocupado, tentando novamente (${attempt}/3)...`);
-                await sleepMs(1800 * (attempt - 1));
+      for (const modelName of modelsToTry) {
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            if (attempt > 1) {
+              onStatusUpdate?.(`Servidor em pico, nova tentativa (${attempt}/3)...`);
+              await sleepMs(1800 * (attempt - 1));
+            }
+
+            const response = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(keyToUse)}`,
+              {
+                method: 'POST',
+                headers: { 
+                  'Content-Type': 'application/json',
+                  'x-goog-api-key': keyToUse
+                },
+                body: JSON.stringify({
+                  contents: [{
+                    parts: [
+                      { text: prompt },
+                      { inlineData: { mimeType: finalMime, data: base64Data } }
+                    ]
+                  }]
+                })
+              }
+            );
+
+            const resJson = await response.json();
+
+            if (!response.ok) {
+              const msg = resJson?.error?.message || `HTTP ${response.status}`;
+              const isHighDemand = 
+                response.status === 503 || 
+                response.status === 429 || 
+                msg.toLowerCase().includes('high demand') || 
+                msg.toLowerCase().includes('overloaded') ||
+                msg.toLowerCase().includes('try again later');
+
+              if (isHighDemand && attempt < 3) {
+                continue;
               }
 
-              const response = await fetch(
-                `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(keyToUse)}`,
-                {
-                  method: 'POST',
-                  headers: { 
-                    'Content-Type': 'application/json',
-                    'x-goog-api-key': keyToUse
-                  },
-                  body: JSON.stringify({
-                    contents: [{
-                      parts: [
-                        { text: prompt },
-                        { inlineData: { mimeType: finalMime, data: base64Data } }
-                      ]
-                    }]
-                  })
-                }
-              );
+              errorsLog.push(`[${modelName}]: ${msg}`);
+              break;
+            }
 
-              const resJson = await response.json();
+            let rawText = resJson?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            if (!rawText) {
+              errorsLog.push(`[${modelName}]: Resposta vazia`);
+              break;
+            }
 
-              if (!response.ok) {
-                const msg = resJson?.error?.message || `HTTP ${response.status}`;
-                const isHighDemand = 
-                  response.status === 503 || 
-                  response.status === 429 || 
-                  msg.toLowerCase().includes('high demand') || 
-                  msg.toLowerCase().includes('overloaded') ||
-                  msg.toLowerCase().includes('try again later');
-
-                if (isHighDemand && attempt < 3) {
-                  continue; // Espera e tenta de novo no mesmo modelo!
-                }
-
-                errorsLog.push(`[${modelName}]: ${msg}`);
-                break; // Vai para o próximo modelo
-              }
-
-              let rawText = resJson?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-              if (!rawText) {
-                errorsLog.push(`[${modelName}]: Resposta vazia`);
-                break;
-              }
-
-              const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-              const cleanJson = jsonMatch ? jsonMatch[0] : rawText;
-              parsedData = JSON.parse(cleanJson);
-              break outerLoop;
-            } catch (innerErr) {
-              if (attempt === 3) {
-                errorsLog.push(`[${modelName}]: ${innerErr.message}`);
-              }
+            const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+            const cleanJson = jsonMatch ? jsonMatch[0] : rawText;
+            parsedData = JSON.parse(cleanJson);
+            break outerLoop;
+          } catch (innerErr) {
+            if (attempt === 3) {
+              errorsLog.push(`[${modelName}]: ${innerErr.message}`);
             }
           }
         }
       }
+    }
 
-      if (!parsedData) {
-        throw new Error(errorsLog.slice(0, 2).join(' | ') || 'API Gemini não respondeu');
+    if (!parsedData) {
+      throw new Error(errorsLog.slice(0, 2).join(' | ') || 'API Gemini não respondeu');
+    }
+
+    const extractedItens = Array.isArray(parsedData.itens) && parsedData.itens.length > 0
+      ? parsedData.itens.map((it, idx) => {
+          const qtd = parseFloat(String(it.quantidadeNF ?? it.quantidade ?? 1).replace(',', '.')) || 1;
+          return {
+            id: `item_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 6)}`,
+            codigo: it.codigo || '',
+            descricao: it.descricao || `Item ${idx + 1}`,
+            unidade: (it.unidade || 'UN').toUpperCase(),
+            quantidadeNF: qtd,
+            quantidadeRecebida: qtd,
+            valorUnitario: parseFloat(String(it.valorUnitario || 0).replace(',', '.')) || 0,
+            divergente: false
+          };
+        })
+      : parsedData.resumoMercadoria
+        ? [{
+            id: `item_${Date.now()}_0`,
+            codigo: '',
+            descricao: parsedData.resumoMercadoria,
+            unidade: 'UN',
+            quantidadeNF: 1,
+            quantidadeRecebida: 1,
+            valorUnitario: parseFloat(String(parsedData.valorTotal || 0).replace(',', '.')) || 0,
+            divergente: false
+          }]
+        : [];
+
+    const cleanChave = String(parsedData.chaveAcesso || '').replace(/\D/g, '');
+    const neuralFill = applyNeuralMemoryToSupplier(parsedData.fornecedor, parsedData.cnpjFornecedor);
+
+    return {
+      numeroNF: parsedData.numeroNF || '',
+      serieNF: parsedData.serieNF || '',
+      fornecedor: parsedData.fornecedor || '',
+      cnpjFornecedor: parsedData.cnpjFornecedor || '',
+      dataEmissaoNF: parsedData.dataEmissaoNF || todayStr,
+      valorTotal: parsedData.valorTotal ? String(parsedData.valorTotal) : '',
+      resumoMercadoria: parsedData.resumoMercadoria || extractedItens.map(i => `${i.quantidadeNF} ${i.unidade} ${i.descricao}`).join('; '),
+      itens: extractedItens,
+      chaveAcesso: cleanChave,
+      neuralFill
+    };
+  };
+
+  // Leitura de 1 única foto (Câmera Nativa ou 1 arquivo da Galeria)
+  const processSingleFileWithGemini = async (file) => {
+    setIsScanning(true);
+    setLastAiError('');
+    setScanMessage('Otimizando imagem e lendo Nota Fiscal...');
+
+    try {
+      const rawDataUrl = await readFileAsDataUrl(file);
+      const result = await extractInvoiceFromDataUrl(rawDataUrl, file.type || 'image/jpeg', setScanMessage);
+
+      if (result.neuralFill?.recognized) {
+        setNeuralSuggestionBanner(`Memória Neural: Fornecedor reconhecido! Setor (${result.neuralFill.setorDestino}) preenchido.`);
       }
-
-      const neuralFill = applyNeuralMemoryToSupplier(parsedData.fornecedor, parsedData.cnpjFornecedor);
-
-      const extractedItens = Array.isArray(parsedData.itens) && parsedData.itens.length > 0
-        ? parsedData.itens.map((it, idx) => {
-            const qtd = parseFloat(String(it.quantidadeNF ?? it.quantidade ?? 1).replace(',', '.')) || 1;
-            return {
-              id: `item_${Date.now()}_${idx}`,
-              codigo: it.codigo || '',
-              descricao: it.descricao || `Item ${idx + 1}`,
-              unidade: (it.unidade || 'UN').toUpperCase(),
-              quantidadeNF: qtd,
-              quantidadeRecebida: qtd,
-              valorUnitario: parseFloat(String(it.valorUnitario || 0).replace(',', '.')) || 0,
-              divergente: false
-            };
-          })
-        : parsedData.resumoMercadoria
-          ? [{
-              id: `item_${Date.now()}_0`,
-              codigo: '',
-              descricao: parsedData.resumoMercadoria,
-              unidade: 'UN',
-              quantidadeNF: 1,
-              quantidadeRecebida: 1,
-              valorUnitario: parseFloat(String(parsedData.valorTotal || 0).replace(',', '.')) || 0,
-              divergente: false
-            }]
-          : [];
-
-      const cleanChave = String(parsedData.chaveAcesso || '').replace(/\D/g, '');
 
       setFormData(prev => ({
         ...prev,
-        numeroNF: parsedData.numeroNF || prev.numeroNF,
-        serieNF: parsedData.serieNF || prev.serieNF,
-        fornecedor: parsedData.fornecedor || prev.fornecedor,
-        cnpjFornecedor: parsedData.cnpjFornecedor || prev.cnpjFornecedor,
-        dataEmissaoNF: parsedData.dataEmissaoNF || prev.dataEmissaoNF,
-        valorTotal: parsedData.valorTotal ? String(parsedData.valorTotal) : prev.valorTotal,
-        resumoMercadoria: parsedData.resumoMercadoria || extractedItens.map(i => `${i.quantidadeNF} ${i.unidade} ${i.descricao}`).join('; '),
-        itens: extractedItens.length > 0 ? extractedItens : prev.itens,
-        chaveAcesso: cleanChave || prev.chaveAcesso,
-        setorDestino: neuralFill.setorDestino || prev.setorDestino,
-        portadorMotorista: neuralFill.portadorMotorista || prev.portadorMotorista,
+        numeroNF: result.numeroNF || prev.numeroNF,
+        serieNF: result.serieNF || prev.serieNF,
+        fornecedor: result.fornecedor || prev.fornecedor,
+        cnpjFornecedor: result.cnpjFornecedor || prev.cnpjFornecedor,
+        dataEmissaoNF: result.dataEmissaoNF || prev.dataEmissaoNF,
+        valorTotal: result.valorTotal || prev.valorTotal,
+        resumoMercadoria: result.resumoMercadoria || prev.resumoMercadoria,
+        itens: result.itens.length > 0 ? result.itens : prev.itens,
+        chaveAcesso: result.chaveAcesso || prev.chaveAcesso,
+        setorDestino: result.neuralFill?.setorDestino || prev.setorDestino,
+        portadorMotorista: result.neuralFill?.portadorMotorista || prev.portadorMotorista,
         anexoPreview: 'ANEXADO'
       }));
 
-      showToast(`NF lida com sucesso! ${extractedItens.length} item(ns) identificado(s).`);
+      showToast(`NF ${result.numeroNF || ''} lida com sucesso! ${result.itens.length} item(ns).`);
     } catch (err) {
       console.error('Erro detalhado na leitura IA:', err);
       setLastAiError(err.message || 'Erro desconhecido');
@@ -714,16 +670,163 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
     }
   };
 
-  const handleFileUpload = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => processDataUrlWithGemini(reader.result, file.type || 'image/jpeg');
-    reader.readAsDataURL(file);
-    e.target.value = '';
+  // ==========================================================================
+  // PROCESSAMENTO EM LOTE (DE 2 ATÉ 20 NOTAS FISCAIS DE UMA VEZ)
+  // ==========================================================================
+  const processMultipleFilesInBatch = async (filesArray) => {
+    const limitedFiles = filesArray.slice(0, 20);
+    if (filesArray.length > 20) {
+      showToast('Limite máximo de 20 notas por vez! Processando as 20 primeiras.', 'error');
+    }
+
+    setIsFormOpen(false);
+    setBatchQueueModalOpen(true);
+    setBatchProgress({ current: 0, total: limitedFiles.length, active: true });
+
+    const initialQueue = limitedFiles.map((f, idx) => ({
+      tempId: `batch_${Date.now()}_${idx}`,
+      fileName: f.name,
+      status: 'AGUARDANDO', // AGUARDANDO | LENDO | PRONTO | ERRO
+      errorMsg: '',
+      selected: true,
+      numeroNF: '',
+      fornecedor: '',
+      cnpjFornecedor: '',
+      dataEmissaoNF: todayStr,
+      valorTotal: '',
+      chaveAcesso: '',
+      itens: [],
+      resumoMercadoria: '',
+      setorDestino: batchGlobalConfig.setorDestino,
+      portadorMotorista: batchGlobalConfig.portadorMotorista,
+      foiComNota: batchGlobalConfig.foiComNota
+    }));
+    setBatchItems(initialQueue);
+
+    for (let i = 0; i < limitedFiles.length; i++) {
+      const file = limitedFiles[i];
+      setBatchProgress({ current: i + 1, total: limitedFiles.length, active: true });
+
+      setBatchItems(prev => prev.map((item, idx) => idx === i ? { ...item, status: 'LENDO' } : item));
+
+      try {
+        const rawDataUrl = await readFileAsDataUrl(file);
+        const extracted = await extractInvoiceFromDataUrl(rawDataUrl, file.type || 'image/jpeg');
+
+        setBatchItems(prev => prev.map((item, idx) => idx === i ? {
+          ...item,
+          status: 'PRONTO',
+          selected: true,
+          numeroNF: extracted.numeroNF || '',
+          fornecedor: extracted.fornecedor || '',
+          cnpjFornecedor: extracted.cnpjFornecedor || '',
+          dataEmissaoNF: extracted.dataEmissaoNF || todayStr,
+          valorTotal: extracted.valorTotal || '0',
+          chaveAcesso: extracted.chaveAcesso || '',
+          itens: extracted.itens || [],
+          resumoMercadoria: extracted.resumoMercadoria || '',
+          setorDestino: extracted.neuralFill?.setorDestino || item.setorDestino,
+          portadorMotorista: extracted.neuralFill?.portadorMotorista || item.portadorMotorista
+        } : item));
+
+        // Pequena pausa entre notas para evitar bloqueio de pico na API gratuita
+        if (i < limitedFiles.length - 1) {
+          await sleepMs(650);
+        }
+      } catch (err) {
+        setBatchItems(prev => prev.map((item, idx) => idx === i ? {
+          ...item,
+          status: 'ERRO',
+          errorMsg: err.message || 'Falha ao ler nota',
+          selected: true // Permite preencher manualmente na própria fila
+        } : item));
+      }
+    }
+
+    setBatchProgress(prev => ({ ...prev, active: false }));
+    showToast('Leitura do lote concluída! Revise os dados antes de confirmar.');
   };
 
-  // Funções para manipular itens dentro do formulário de criação/edição
+  const handleFilesSelected = (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (files.length === 0) return;
+
+    if (files.length === 1) {
+      processSingleFileWithGemini(files[0]);
+    } else {
+      processMultipleFilesInBatch(files);
+    }
+  };
+
+  const handleSaveBatchAll = async () => {
+    if (!fbUser) return;
+    const toSave = batchItems.filter(it => it.selected && it.numeroNF.trim() !== '' && it.fornecedor.trim() !== '');
+
+    if (toSave.length === 0) {
+      showToast('Preencha Nº da NF e Fornecedor nas notas selecionadas.', 'error');
+      return;
+    }
+
+    try {
+      const colRef = collection(db, 'artifacts', appId, 'public', 'data', 'remessas_nf');
+      const nowIso = new Date().toISOString();
+
+      for (const item of toSave) {
+        const cleanItens = (item.itens || []).filter(i => i.descricao && i.descricao.trim() !== '');
+        const autoResumo = cleanItens.length > 0
+          ? cleanItens.map(i => `${i.quantidadeNF} ${i.unidade || 'UN'} - ${i.descricao}`).join(' | ')
+          : item.resumoMercadoria;
+
+        const historyEntry = {
+          id: 'h_' + Date.now() + '_' + Math.random().toString(36).slice(2, 5),
+          dataHora: nowIso,
+          usuario: loggedUser?.name || 'Usuário',
+          perfil: ROLES_CONFIG[loggedUser?.role]?.label || '',
+          acao: 'Despacho em Lote (Múltiplas NFs)',
+          detalhes: `NF ${item.numeroNF} (${item.fornecedor}) com ${cleanItens.length} item(ns). Chave: ${item.chaveAcesso || 'Não informada'}.`
+        };
+
+        await addDoc(colRef, {
+          numeroNF: item.numeroNF.trim(),
+          serieNF: '',
+          fornecedor: item.fornecedor.trim(),
+          cnpjFornecedor: item.cnpjFornecedor || '',
+          dataEmissaoNF: item.dataEmissaoNF || todayStr,
+          valorTotal: parseFloat(String(item.valorTotal || 0).replace(',', '.')) || 0,
+          resumoMercadoria: autoResumo,
+          itens: cleanItens,
+          chaveAcesso: String(item.chaveAcesso || '').replace(/\D/g, ''),
+          dataEnvioFazenda: todayStr,
+          portadorMotorista: item.portadorMotorista || batchGlobalConfig.portadorMotorista || '',
+          setorDestino: item.setorDestino || batchGlobalConfig.setorDestino || 'Almoxarifado Central',
+          foiComNota: item.foiComNota || batchGlobalConfig.foiComNota || 'SIM',
+          statusAlmoxarifado: 'PENDENTE',
+          dataRecebimentoAlmox: '',
+          recebidoPorAlmox: '',
+          statusRetornoEscritorio: 'PENDENTE',
+          dataRetornoEscritorio: '',
+          recebidoPorEscritorio: '',
+          statusDivergenciaCompras: 'NENHUMA',
+          historico: [historyEntry],
+          observacoes: '',
+          anexoPreview: 'ANEXADO_LOTE',
+          lancadoPor: loggedUser?.name || 'Usuário',
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        });
+      }
+
+      setBatchQueueModalOpen(false);
+      setBatchItems([]);
+      showToast(`${toSave.length} Nota(s) Fiscal(is) salva(s) com sucesso!`);
+    } catch (err) {
+      console.error(err);
+      showToast('Erro ao salvar lote de notas.', 'error');
+    }
+  };
+
+  // Funções para manipular itens dentro do formulário individual
   const handleAddFormItem = () => {
     setFormData(prev => ({
       ...prev,
@@ -1080,18 +1183,54 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
     return { total, pendAlmox, pendCompras, pendOffice, concluidos };
   }, [remessas]);
 
+  // ==========================================================================
+  // FILTRAGEM COMBINADA (BUSCA RÁPIDA + ABA DE PESQUISA AVANÇADA)
+  // ==========================================================================
   const filteredRemessas = useMemo(() => {
     return remessas.filter(r => {
       const itensStr = (r.itens || []).map(i => i.descricao).join(' ');
-      const matchesSearch = 
-        (r.numeroNF || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (r.fornecedor || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (r.chaveAcesso || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (r.resumoMercadoria || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        itensStr.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (r.portadorMotorista || '').toLowerCase().includes(searchTerm.toLowerCase());
 
-      if (!matchesSearch) return false;
+      // 1. Busca Rápida Geral
+      if (searchTerm.trim() !== '') {
+        const term = searchTerm.toLowerCase();
+        const matchesQuick = 
+          (r.numeroNF || '').toLowerCase().includes(term) ||
+          (r.fornecedor || '').toLowerCase().includes(term) ||
+          (r.chaveAcesso || '').toLowerCase().includes(term) ||
+          (r.resumoMercadoria || '').toLowerCase().includes(term) ||
+          itensStr.toLowerCase().includes(term) ||
+          (r.portadorMotorista || '').toLowerCase().includes(term);
+        if (!matchesQuick) return false;
+      }
+
+      // 2. Filtros da Aba de Pesquisa Avançada
+      if (advFilters.numeroNF.trim() !== '') {
+        if (!(r.numeroNF || '').toLowerCase().includes(advFilters.numeroNF.trim().toLowerCase())) return false;
+      }
+      if (advFilters.fornecedor.trim() !== '') {
+        if (!(r.fornecedor || '').toLowerCase().includes(advFilters.fornecedor.trim().toLowerCase())) return false;
+      }
+      if (advFilters.itemPeca.trim() !== '') {
+        const itemTerm = advFilters.itemPeca.trim().toLowerCase();
+        const inItens = (r.itens || []).some(i => (i.descricao || '').toLowerCase().includes(itemTerm));
+        const inResumo = (r.resumoMercadoria || '').toLowerCase().includes(itemTerm);
+        if (!inItens && !inResumo) return false;
+      }
+      if (advFilters.setor !== 'TODOS') {
+        if (r.setorDestino !== advFilters.setor) return false;
+      }
+      if (advFilters.dataInicio || advFilters.dataFim) {
+        const targetDate = 
+          advFilters.tipoData === 'ENVIO' ? r.dataEnvioFazenda :
+          advFilters.tipoData === 'ALMOX' ? r.dataRecebimentoAlmox :
+          r.dataEmissaoNF;
+
+        if (!targetDate) return false;
+        if (advFilters.dataInicio && targetDate < advFilters.dataInicio) return false;
+        if (advFilters.dataFim && targetDate > advFilters.dataFim) return false;
+      }
+
+      // 3. Filtro de Status nas Abas
       if (statusFilter === 'PEND_ALMOX') return r.statusAlmoxarifado !== 'RECEBIDO';
       if (statusFilter === 'PEND_COMPRAS') return r.statusDivergenciaCompras === 'PENDENTE_COMPRAS';
       if (statusFilter === 'PEND_ESCRITORIO') return r.statusRetornoEscritorio !== 'RECEBIDO';
@@ -1102,12 +1241,220 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
       }
       return true;
     });
-  }, [remessas, searchTerm, statusFilter]);
+  }, [remessas, searchTerm, statusFilter, advFilters]);
 
-  const formatDateBR = (d) => {
-    if (!d) return '-';
-    const parts = d.split('-');
-    return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : d;
+  const hasActiveAdvFilters = useMemo(() => {
+    return (
+      advFilters.dataInicio !== '' ||
+      advFilters.dataFim !== '' ||
+      advFilters.numeroNF.trim() !== '' ||
+      advFilters.fornecedor.trim() !== '' ||
+      advFilters.itemPeca.trim() !== '' ||
+      advFilters.setor !== 'TODOS'
+    );
+  }, [advFilters]);
+
+  const clearAdvancedFilters = () => {
+    setAdvFilters({
+      tipoData: 'EMISSAO',
+      dataInicio: '',
+      dataFim: '',
+      numeroNF: '',
+      fornecedor: '',
+      itemPeca: '',
+      setor: 'TODOS'
+    });
+    setSearchTerm('');
+  };
+
+  // ==========================================================================
+  // EXPORTAÇÃO PARA EXCEL (CSV PADRÃO BRASILEIRO) E RELATÓRIO PDF
+  // ==========================================================================
+  const handleExportExcelCSV = () => {
+    if (filteredRemessas.length === 0) {
+      showToast('Nenhum registro na lista atual para exportar.', 'error');
+      return;
+    }
+
+    const headers = [
+      'Numero NF',
+      'Data Emissao',
+      'Fornecedor',
+      'Valor Total (R$)',
+      'Chave de Acesso (44 digitos)',
+      'Itens (Qtd NF vs Qtd Recebida)',
+      'Setor Destino',
+      'Data Envio Fazenda',
+      'Motorista / Portador',
+      'Foi com Nota',
+      'Status Almoxarifado',
+      'Data Receb. Almoxarifado',
+      'Recebido Por Almox.',
+      'Status Divergencia Compras',
+      'Parecer Compras',
+      'Status Retorno Escritorio',
+      'Data Retorno Escritorio',
+      'Conferido Escritorio Por'
+    ];
+
+    const escapeCsv = (val) => {
+      const str = String(val ?? '').replace(/"/g, '""').replace(/\r?\n/g, ' ');
+      return `"${str}"`;
+    };
+
+    const rows = filteredRemessas.map(r => {
+      const valorBR = Number(r.valorTotal || 0).toFixed(2).replace('.', ',');
+      const itensFormatados = Array.isArray(r.itens) && r.itens.length > 0
+        ? r.itens.map(i => `${i.descricao} [NF: ${String(i.quantidadeNF).replace('.', ',')} ${i.unidade || 'UN'} | Rec: ${String(i.quantidadeRecebida ?? i.quantidadeNF).replace('.', ',')} ${i.unidade || 'UN'}]`).join(' / ')
+        : (r.resumoMercadoria || '');
+
+      return [
+        escapeCsv(r.numeroNF),
+        escapeCsv(formatDateBR(r.dataEmissaoNF)),
+        escapeCsv(r.fornecedor),
+        escapeCsv(valorBR),
+        escapeCsv(`'${r.chaveAcesso || ''}`), // Apóstrofo evita que o Excel converta os 44 dígitos em notação científica
+        escapeCsv(itensFormatados),
+        escapeCsv(r.setorDestino),
+        escapeCsv(formatDateBR(r.dataEnvioFazenda)),
+        escapeCsv(r.portadorMotorista),
+        escapeCsv(r.foiComNota),
+        escapeCsv(r.statusAlmoxarifado),
+        escapeCsv(formatDateBR(r.dataRecebimentoAlmox)),
+        escapeCsv(r.recebidoPorAlmox),
+        escapeCsv(r.statusDivergenciaCompras || 'NENHUMA'),
+        escapeCsv(r.parecerCompras || ''),
+        escapeCsv(r.statusRetornoEscritorio),
+        escapeCsv(formatDateBR(r.dataRetornoEscritorio)),
+        escapeCsv(r.recebidoPorEscritorio)
+      ].join(';');
+    });
+
+    // BOM UTF-8 (\uFEFF) garante acentuação perfeita ao abrir direto no Microsoft Excel
+    const csvContent = '\uFEFF' + headers.join(';') + '\r\n' + rows.join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `Relatorio_NFs_Fazenda_${todayStr}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    showToast(`Planilha Excel (${filteredRemessas.length} NFs) baixada com sucesso!`);
+  };
+
+  const handleExportPDF = () => {
+    if (filteredRemessas.length === 0) {
+      showToast('Nenhum registro na lista atual para gerar PDF.', 'error');
+      return;
+    }
+
+    const totalValor = filteredRemessas.reduce((acc, r) => acc + (Number(r.valorTotal) || 0), 0);
+    const win = window.open('', '_blank');
+    if (!win) {
+      showToast('Permita pop-ups no navegador para abrir o PDF.', 'error');
+      return;
+    }
+
+    const rowsHtml = filteredRemessas.map(r => {
+      const itensHtml = Array.isArray(r.itens) && r.itens.length > 0
+        ? r.itens.map(i => {
+            const diff = Number(i.quantidadeRecebida ?? i.quantidadeNF) !== Number(i.quantidadeNF);
+            return `<div style="margin-bottom:2px;">• <strong>${i.descricao}</strong> — NF: ${i.quantidadeNF} ${i.unidade || 'UN'} | Rec: <span style="${diff ? 'color:#b91c1c;font-weight:bold;' : 'color:#047857;'}">${i.quantidadeRecebida ?? i.quantidadeNF} ${i.unidade || 'UN'}</span></div>`;
+          }).join('')
+        : (r.resumoMercadoria || '-');
+
+      return `
+        <tr>
+          <td>
+            <strong>NF ${r.numeroNF}</strong><br/>
+            <span style="font-size:10px;color:#555;">Emissão: ${formatDateBR(r.dataEmissaoNF)}</span><br/>
+            <strong style="color:#047857;">${Number(r.valorTotal || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</strong>
+          </td>
+          <td>
+            <strong>${r.fornecedor}</strong>
+            ${r.chaveAcesso ? `<div style="font-family:monospace;font-size:9px;color:#444;margin-top:2px;word-break:break-all;">Chave: ${r.chaveAcesso}</div>` : ''}
+          </td>
+          <td style="font-size:10px;">${itensHtml}</td>
+          <td>
+            <strong>${r.setorDestino}</strong><br/>
+            Envio: ${formatDateBR(r.dataEnvioFazenda)}<br/>
+            Portador: ${r.portadorMotorista || '-'}
+          </td>
+          <td>
+            <strong>${r.statusAlmoxarifado}</strong><br/>
+            ${r.statusAlmoxarifado === 'RECEBIDO' ? `${formatDateBR(r.dataRecebimentoAlmox)} (${r.recebidoPorAlmox})` : 'Pendente'}
+            ${r.statusDivergenciaCompras === 'PENDENTE_COMPRAS' ? '<div style="color:#b91c1c;font-weight:bold;margin-top:2px;">⚠ Divergência Qtd</div>' : ''}
+          </td>
+          <td>
+            <strong>${r.statusRetornoEscritorio}</strong><br/>
+            ${r.statusRetornoEscritorio === 'RECEBIDO' ? `${formatDateBR(r.dataRetornoEscritorio)} (${r.recebidoPorEscritorio})` : 'Pendente'}
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    win.document.write(`
+      <!DOCTYPE html>
+      <html lang="pt-BR">
+      <head>
+        <meta charset="UTF-8" />
+        <title>Relatório de Controle de NFs - Fazenda</title>
+        <style>
+          body { font-family: Arial, sans-serif; font-size: 11px; color: #1e293b; margin: 20px; }
+          .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #059669; padding-bottom: 10px; margin-bottom: 14px; }
+          .title { font-size: 16px; font-weight: bold; color: #065f46; }
+          .summary { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px 12px; margin-bottom: 14px; display: flex; gap: 24px; font-size: 11px; }
+          table { width: 100%; border-collapse: collapse; }
+          th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; vertical-align: top; }
+          th { background: #f1f5f9; font-size: 10px; text-transform: uppercase; color: #334155; }
+          @media print {
+            .no-print { display: none; }
+            body { margin: 0; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="no-print" style="margin-bottom:12px;text-align:right;">
+          <button onclick="window.print()" style="background:#059669;color:#fff;border:none;padding:8px 16px;border-radius:6px;font-weight:bold;cursor:pointer;">
+            🖨️ Imprimir / Salvar como PDF
+          </button>
+        </div>
+        <div class="header">
+          <div>
+            <div class="title">Relatório de Controle de Notas Fiscais — Fazenda</div>
+            <div style="font-size:11px;color:#64748b;">Gerado em ${formatDateTimeBR(new Date().toISOString())} por ${loggedUser?.name || 'Usuário'}</div>
+          </div>
+        </div>
+        <div class="summary">
+          <div><strong>Total de Notas no Relatório:</strong> ${filteredRemessas.length}</div>
+          <div><strong>Valor Total Somado:</strong> ${totalValor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</div>
+          <div><strong>Filtro Status:</strong> ${statusFilter}</div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th style="width:12%;">NF / Valor</th>
+              <th style="width:20%;">Fornecedor / Chave</th>
+              <th style="width:28%;">Itens Individuais (NF vs Recebido)</th>
+              <th style="width:14%;">Setor / Envio</th>
+              <th style="width:13%;">1. Almoxarifado</th>
+              <th style="width:13%;">2. Escritório</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsHtml}
+          </tbody>
+        </table>
+        <script>
+          setTimeout(() => { window.print(); }, 400);
+        </script>
+      </body>
+      </html>
+    `);
+    win.document.close();
   };
 
   // Prepara a lista de itens ao abrir o modal do Almoxarifado
@@ -1145,7 +1492,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
               <FileText className="w-6 h-6" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-slate-800 leading-tight">Controle de NFs v2.3</h1>
+              <h1 className="text-lg font-bold text-slate-800 leading-tight">Controle de NFs v2.4</h1>
               <p className="text-xs text-slate-500">Selecione o seu perfil para entrar</p>
             </div>
           </div>
@@ -1227,7 +1574,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
             </button>
             <div className="truncate">
               <div className="flex items-center gap-1.5">
-                <span className="font-bold text-sm text-slate-800 truncate">Controle NFs <span className="text-[10px] text-emerald-600 font-mono">v2.3</span></span>
+                <span className="font-bold text-sm text-slate-800 truncate">Controle NFs <span className="text-[10px] text-emerald-600 font-mono">v2.4</span></span>
                 <span className="px-2 py-0.5 text-[11px] font-semibold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 truncate">
                   {loggedUser.name}
                 </span>
@@ -1241,7 +1588,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
                 <button
                   onClick={() => setUsersModalOpen(true)}
                   className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium flex items-center gap-1"
-                  title="Gerir Utilizadores"
+                  title="Gerenciar Usuários"
                 >
                   <Users className="w-4 h-4" />
                   <span className="hidden md:inline">Usuários</span>
@@ -1279,7 +1626,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
 
             <button
               onClick={handleLogout}
-              title="Trocar Utilizador / Sair"
+              title="Trocar Usuário / Sair"
               className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600"
             >
               <LogOut className="w-4 h-4" />
@@ -1289,84 +1636,237 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
       </header>
 
       <main className="max-w-7xl mx-auto px-3 pt-3 space-y-3">
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
-          <button
-            onClick={() => setStatusFilter('TODOS')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap border transition flex items-center gap-1.5 ${
-              statusFilter === 'TODOS'
-                ? 'bg-slate-800 text-white border-slate-800'
-                : 'bg-white text-slate-700 border-slate-200'
-            }`}
-          >
-            <span>Todas</span>
-            <span className="px-1.5 py-0.2 rounded-full bg-slate-200/30 text-[11px]">{stats.total}</span>
-          </button>
+        {/* FILTROS DE STATUS E BOTÕES DE EXPORTAÇÃO EXCEL / PDF */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+            <button
+              onClick={() => setStatusFilter('TODOS')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap border transition flex items-center gap-1.5 ${
+                statusFilter === 'TODOS'
+                  ? 'bg-slate-800 text-white border-slate-800'
+                  : 'bg-white text-slate-700 border-slate-200'
+              }`}
+            >
+              <span>Todas</span>
+              <span className="px-1.5 py-0.2 rounded-full bg-slate-200/30 text-[11px]">{stats.total}</span>
+            </button>
 
-          <button
-            onClick={() => setStatusFilter('PEND_ALMOX')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap border transition flex items-center gap-1.5 ${
-              statusFilter === 'PEND_ALMOX'
-                ? 'bg-amber-600 text-white border-amber-600'
-                : 'bg-white text-amber-700 border-amber-200'
-            }`}
-          >
-            <Warehouse className="w-3.5 h-3.5" />
-            <span>Falta Almoxarifado</span>
-            <span className="px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-900 text-[11px]">{stats.pendAlmox}</span>
-          </button>
+            <button
+              onClick={() => setStatusFilter('PEND_ALMOX')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap border transition flex items-center gap-1.5 ${
+                statusFilter === 'PEND_ALMOX'
+                  ? 'bg-amber-600 text-white border-amber-600'
+                  : 'bg-white text-amber-700 border-amber-200'
+              }`}
+            >
+              <Warehouse className="w-3.5 h-3.5" />
+              <span>Falta Almoxarifado</span>
+              <span className="px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-900 text-[11px]">{stats.pendAlmox}</span>
+            </button>
 
-          <button
-            onClick={() => setStatusFilter('PEND_COMPRAS')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap border transition flex items-center gap-1.5 ${
-              statusFilter === 'PEND_COMPRAS'
-                ? 'bg-red-600 text-white border-red-600'
-                : stats.pendCompras > 0
-                  ? 'bg-red-50 text-red-700 border-red-300 animate-pulse'
-                  : 'bg-white text-rose-700 border-rose-200'
-            }`}
-          >
-            <AlertTriangle className="w-3.5 h-3.5" />
-            <span>Pendências Compras</span>
-            <span className="px-1.5 py-0.2 rounded-full bg-red-100 text-red-900 text-[11px]">{stats.pendCompras}</span>
-          </button>
+            <button
+              onClick={() => setStatusFilter('PEND_COMPRAS')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap border transition flex items-center gap-1.5 ${
+                statusFilter === 'PEND_COMPRAS'
+                  ? 'bg-red-600 text-white border-red-600'
+                  : stats.pendCompras > 0
+                    ? 'bg-red-50 text-red-700 border-red-300 animate-pulse'
+                    : 'bg-white text-rose-700 border-rose-200'
+              }`}
+            >
+              <AlertTriangle className="w-3.5 h-3.5" />
+              <span>Pendências Compras</span>
+              <span className="px-1.5 py-0.2 rounded-full bg-red-100 text-red-900 text-[11px]">{stats.pendCompras}</span>
+            </button>
 
-          <button
-            onClick={() => setStatusFilter('PEND_ESCRITORIO')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap border transition flex items-center gap-1.5 ${
-              statusFilter === 'PEND_ESCRITORIO'
-                ? 'bg-blue-600 text-white border-blue-600'
-                : 'bg-white text-blue-700 border-blue-200'
-            }`}
-          >
-            <Building2 className="w-3.5 h-3.5" />
-            <span>Falta Escritório</span>
-            <span className="px-1.5 py-0.2 rounded-full bg-blue-100 text-blue-900 text-[11px]">{stats.pendOffice}</span>
-          </button>
+            <button
+              onClick={() => setStatusFilter('PEND_ESCRITORIO')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap border transition flex items-center gap-1.5 ${
+                statusFilter === 'PEND_ESCRITORIO'
+                  ? 'bg-blue-600 text-white border-blue-600'
+                  : 'bg-white text-blue-700 border-blue-200'
+              }`}
+            >
+              <Building2 className="w-3.5 h-3.5" />
+              <span>Falta Escritório</span>
+              <span className="px-1.5 py-0.2 rounded-full bg-blue-100 text-blue-900 text-[11px]">{stats.pendOffice}</span>
+            </button>
 
-          <button
-            onClick={() => setStatusFilter('CONCLUIDO')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap border transition flex items-center gap-1.5 ${
-              statusFilter === 'CONCLUIDO'
-                ? 'bg-emerald-600 text-white border-emerald-600'
-                : 'bg-white text-emerald-700 border-emerald-200'
-            }`}
-          >
-            <CheckCircle2 className="w-3.5 h-3.5" />
-            <span>Concluídas</span>
-            <span className="px-1.5 py-0.2 rounded-full bg-emerald-100 text-emerald-900 text-[11px]">{stats.concluidos}</span>
-          </button>
+            <button
+              onClick={() => setStatusFilter('CONCLUIDO')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap border transition flex items-center gap-1.5 ${
+                statusFilter === 'CONCLUIDO'
+                  ? 'bg-emerald-600 text-white border-emerald-600'
+                  : 'bg-white text-emerald-700 border-emerald-200'
+              }`}
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>Concluídas</span>
+              <span className="px-1.5 py-0.2 rounded-full bg-emerald-100 text-emerald-900 text-[11px]">{stats.concluidos}</span>
+            </button>
+          </div>
+
+          {/* BOTÕES DE RELATÓRIO EXCEL / PDF E PESQUISA AVANÇADA */}
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setShowAdvancedSearch(prev => !prev)}
+              className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold border flex items-center gap-1 transition ${
+                showAdvancedSearch || hasActiveAdvFilters
+                  ? 'bg-emerald-700 text-white border-emerald-700'
+                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+              }`}
+            >
+              <Filter className="w-3.5 h-3.5" />
+              <span>Pesquisa Avançada</span>
+              {hasActiveAdvFilters && <span className="w-2 h-2 rounded-full bg-amber-300" />}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleExportExcelCSV}
+              className="px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1"
+              title="Exportar lista filtrada para Excel (CSV)"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Excel</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleExportPDF}
+              className="px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 flex items-center gap-1"
+              title="Gerar Relatório em PDF / Imprimir"
+            >
+              <Printer className="w-3.5 h-3.5 text-slate-600" />
+              <span>PDF</span>
+            </button>
+          </div>
         </div>
 
+        {/* BARRA DE BUSCA RÁPIDA */}
         <div className="relative">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Buscar Nº da NF, chave de acesso, fornecedor, item ou motorista..."
+            placeholder="Busca rápida: digite Nº da NF, chave de acesso, fornecedor, peça ou motorista..."
             className="w-full pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-emerald-500 outline-none"
           />
         </div>
+
+        {/* ABA / PAINEL DE PESQUISA AVANÇADA (POR DATA, Nº NF, FORNECEDOR, ITEM DA PEÇA) */}
+        {showAdvancedSearch && (
+          <div className="bg-white border border-emerald-200 rounded-2xl p-3.5 shadow-sm space-y-3 text-xs">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+              <span className="font-bold text-emerald-900 flex items-center gap-1.5">
+                <Filter className="w-4 h-4 text-emerald-600" />
+                Filtros de Pesquisa Avançada ({filteredRemessas.length} resultado(s) encontrado(s))
+              </span>
+              <div className="flex items-center gap-2">
+                {hasActiveAdvFilters && (
+                  <button
+                    type="button"
+                    onClick={clearAdvancedFilters}
+                    className="text-red-600 font-semibold hover:underline"
+                  >
+                    Limpar Filtros
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowAdvancedSearch(false)}
+                  className="text-slate-400 hover:text-slate-600"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2.5">
+              <div>
+                <label className="font-semibold text-slate-600">Nº da Nota Fiscal</label>
+                <input
+                  type="text"
+                  placeholder="Ex: 14502"
+                  value={advFilters.numeroNF}
+                  onChange={(e) => setAdvFilters({ ...advFilters, numeroNF: e.target.value })}
+                  className="w-full mt-1 px-2.5 py-1.5 border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div>
+                <label className="font-semibold text-slate-600">Nome do Fornecedor</label>
+                <input
+                  type="text"
+                  placeholder="Ex: Agrícola, John Deere..."
+                  value={advFilters.fornecedor}
+                  onChange={(e) => setAdvFilters({ ...advFilters, fornecedor: e.target.value })}
+                  className="w-full mt-1 px-2.5 py-1.5 border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div>
+                <label className="font-semibold text-slate-600">Item / Peça / Produto</label>
+                <input
+                  type="text"
+                  placeholder="Ex: Rolamento, Filtro, Adubo..."
+                  value={advFilters.itemPeca}
+                  onChange={(e) => setAdvFilters({ ...advFilters, itemPeca: e.target.value })}
+                  className="w-full mt-1 px-2.5 py-1.5 border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div>
+                <label className="font-semibold text-slate-600">Setor na Fazenda</label>
+                <select
+                  value={advFilters.setor}
+                  onChange={(e) => setAdvFilters({ ...advFilters, setor: e.target.value })}
+                  className="w-full mt-1 px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white"
+                >
+                  <option value="TODOS">Todos os Setores</option>
+                  {SETORES_FAZENDA.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2 border-t border-slate-100">
+              <div>
+                <label className="font-semibold text-slate-600">Filtrar por qual Data?</label>
+                <select
+                  value={advFilters.tipoData}
+                  onChange={(e) => setAdvFilters({ ...advFilters, tipoData: e.target.value })}
+                  className="w-full mt-1 px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white"
+                >
+                  <option value="EMISSAO">Data de Emissão da NF</option>
+                  <option value="ENVIO">Data de Envio p/ Fazenda</option>
+                  <option value="ALMOX">Data de Recebimento Almoxarifado</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="font-semibold text-slate-600">Data Inicial (De)</label>
+                <input
+                  type="date"
+                  value={advFilters.dataInicio}
+                  onChange={(e) => setAdvFilters({ ...advFilters, dataInicio: e.target.value })}
+                  className="w-full mt-1 px-2.5 py-1.5 border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div>
+                <label className="font-semibold text-slate-600">Data Final (Até)</label>
+                <input
+                  type="date"
+                  value={advFilters.dataFim}
+                  onChange={(e) => setAdvFilters({ ...advFilters, dataFim: e.target.value })}
+                  className="w-full mt-1 px-2.5 py-1.5 border border-slate-300 rounded-lg"
+                />
+              </div>
+            </div>
+          </div>
+        )}
 
         {loading ? (
           <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center text-slate-500 text-sm">
@@ -1376,7 +1876,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
           <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center space-y-2">
             <FileText className="w-8 h-8 text-slate-400 mx-auto" />
             <p className="text-sm font-semibold text-slate-700">Nenhuma Nota Fiscal encontrada neste filtro</p>
-            <p className="text-xs text-slate-500">Clique em "+ Nova NF" no topo para fotografar ou anexar uma nota.</p>
+            <p className="text-xs text-slate-500">Clique em "+ Nova NF" no topo para fotografar ou anexar até 20 notas de uma vez.</p>
           </div>
         ) : (
           <>
@@ -1788,13 +2288,13 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
         )}
       </main>
 
-      {/* MODAL: NOVO DESPACHO / EDIÇÃO COM CHAVE E ITENS INDIVIDUAIS */}
+      {/* MODAL: NOVO DESPACHO / EDIÇÃO (COM CÂMERA NATIVA DIRETA E LOTE ATÉ 20 NOTAS) */}
       {isFormOpen && (
         <div className="fixed inset-0 z-40 bg-slate-900/60 flex items-start justify-center p-2 pt-3 overflow-y-auto">
           <div className="bg-white rounded-2xl max-w-2xl w-full p-4 shadow-xl mb-20">
             <div className="flex items-center justify-between pb-3 border-b border-slate-200">
               <h2 className="text-sm font-bold text-slate-800">
-                {editingId ? 'Editar Registro de NF' : 'Novo Despacho de Mercadoria (v2.3)'}
+                {editingId ? 'Editar Registro de NF' : 'Novo Despacho de Mercadoria (v2.4)'}
               </h2>
               <button onClick={resetForm} className="p-1 rounded-lg text-slate-400 hover:bg-slate-100">
                 <X className="w-5 h-5" />
@@ -1803,39 +2303,48 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
 
             <div className="my-3 bg-emerald-50/70 border border-emerald-200 rounded-xl p-3">
               <div className="grid grid-cols-2 gap-2">
+                {/* Botão abre DIRETO a câmera nativa original do celular */}
                 <button
                   type="button"
-                  onClick={openLiveCamera}
+                  onClick={() => nativeCameraInputRef.current?.click()}
                   disabled={isScanning}
                   className="py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl text-xs flex items-center justify-center gap-2 shadow-sm"
                 >
-                  <Camera className="w-4 h-4" /> Tirar Foto (15-20cm)
+                  <Camera className="w-4 h-4" /> Tirar Foto (Câmera)
                 </button>
+                {/* Botão permite selecionar de 1 até 20 fotos/PDFs da galeria */}
                 <button
                   type="button"
                   onClick={() => galleryInputRef.current?.click()}
                   disabled={isScanning}
                   className="py-2.5 px-3 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 font-semibold rounded-xl text-xs flex items-center justify-center gap-2"
                 >
-                  <ImageIcon className="w-4 h-4" /> Galeria / PDF
+                  <Layers className="w-4 h-4 text-emerald-600" /> Galeria / PDF (Até 20)
                 </button>
               </div>
+              <p className="text-[10px] text-slate-500 text-center mt-1.5">
+                Dica: Na Galeria, você pode selecionar até <strong>20 notas de uma só vez</strong> para leitura em fila e confirmação posterior.
+              </p>
+
+              {/* Input Galeria com seleção múltipla (até 20) */}
               <input
                 ref={galleryInputRef}
                 type="file"
+                multiple
                 accept="image/*,application/pdf"
-                onChange={handleFileUpload}
+                onChange={handleFilesSelected}
                 className="hidden"
               />
-              {/* Input para câmera nativa do celular (suporta lente ultra-wide/macro nativa do aparelho) */}
+              {/* Input Câmera Nativa Direta */}
               <input
                 ref={nativeCameraInputRef}
                 type="file"
                 accept="image/*"
                 capture="environment"
-                onChange={handleFileUpload}
+                onChange={handleFilesSelected}
                 className="hidden"
               />
+
               {isScanning && (
                 <div className="mt-2 flex items-center justify-center gap-2 text-xs font-semibold text-emerald-800">
                   <RefreshCw className="w-4 h-4 animate-spin" /> {scanMessage}
@@ -1843,7 +2352,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
               )}
               {lastAiError && (
                 <div className="mt-2 text-[11px] text-red-700 bg-red-50 border border-red-200 rounded-lg p-2">
-                  <strong>Diagnóstico v2.3:</strong> {lastAiError}
+                  <strong>Diagnóstico v2.4:</strong> {lastAiError}
                 </div>
               )}
               {neuralSuggestionBanner && (
@@ -2033,81 +2542,211 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
         </div>
       )}
 
-      {/* MODAL CÂMERA OTIMIZADO PARA CURTA DISTÂNCIA (15-20CM SEM ZOOM FORÇADO) */}
-      {isCameraOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/90 flex items-start justify-center p-2 pt-3 overflow-y-auto">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-sm p-3 text-white space-y-2.5">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold flex items-center gap-1.5 text-emerald-400">
-                <Camera className="w-4 h-4" /> Enquadramento Aberto (15 a 20 cm)
-              </span>
-              <button onClick={closeLiveCamera} className="p-1 rounded-lg text-slate-400 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="relative w-full aspect-[3/4] bg-black rounded-xl overflow-hidden border-2 border-emerald-500/60 flex items-center justify-center">
-              {/* object-contain evita que o navegador corte as bordas e dê zoom na nota */}
-              <video
-                ref={setVideoRef}
-                autoPlay
-                playsInline
-                muted
-                className="w-full h-full object-contain"
-              />
-              <div className="absolute inset-2 border border-dashed border-emerald-400/70 rounded-lg pointer-events-none flex flex-col justify-between p-1.5 text-center">
-                <span className="bg-black/65 text-[10px] text-emerald-300 px-2 py-0.5 rounded mx-auto">
-                  Posicione de 15 a 20 cm da Nota Fiscal
-                </span>
-                <span className="bg-black/65 text-[10px] text-white/80 px-2 py-0.5 rounded mx-auto">
-                  Sem corte lateral • Campo de visão total
-                </span>
+      {/* MODAL: PROCESSAMENTO E REVISÃO EM LOTE (ATÉ 20 NOTAS FISCAIS) */}
+      {batchQueueModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/70 flex items-start justify-center p-2 pt-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-3xl w-full p-4 shadow-2xl space-y-3 mb-20 text-xs">
+            <div className="flex items-center justify-between border-b pb-2.5">
+              <div>
+                <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                  <Layers className="w-4 h-4 text-emerald-600" />
+                  Processamento em Lote ({batchItems.length} Nota(s) Selecionada(s))
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  As notas são lidas uma a uma pela IA. Revise os campos abaixo e clique em Confirmar Todas.
+                </p>
               </div>
+              {!batchProgress.active && (
+                <button onClick={() => setBatchQueueModalOpen(false)} className="p-1 text-slate-400 hover:text-slate-700">
+                  <X className="w-5 h-5" />
+                </button>
+              )}
             </div>
 
-            {/* Controle manual de Zoom caso o aparelho suporte */}
-            {zoomRange.supported && (
-              <div className="flex items-center gap-2 bg-slate-800/90 px-3 py-1.5 rounded-xl text-xs">
-                <ZoomIn className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span className="text-[11px] text-slate-300 shrink-0">Zoom:</span>
+            {/* BARRA DE PROGRESSO DA FILA */}
+            {batchProgress.active && (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 space-y-1.5">
+                <div className="flex items-center justify-between font-semibold text-emerald-900">
+                  <span className="flex items-center gap-1.5">
+                    <RefreshCw className="w-4 h-4 animate-spin text-emerald-600" />
+                    Lendo Nota Fiscal {batchProgress.current} de {batchProgress.total}...
+                  </span>
+                  <span>{Math.round((batchProgress.current / batchProgress.total) * 100)}%</span>
+                </div>
+                <div className="w-full h-2 bg-emerald-200 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-emerald-600 transition-all duration-300"
+                    style={{ width: `${(batchProgress.current / batchProgress.total) * 100}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* CONFIGURAÇÃO PADRÃO PARA APLICAR A TODAS DO LOTE */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div>
+                <label className="font-semibold text-slate-600 text-[11px]">Setor Padrão do Lote</label>
+                <select
+                  value={batchGlobalConfig.setorDestino}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setBatchGlobalConfig(prev => ({ ...prev, setorDestino: val }));
+                    setBatchItems(prev => prev.map(it => ({ ...it, setorDestino: val })));
+                  }}
+                  className="w-full mt-0.5 px-2 py-1.5 border rounded-lg bg-white"
+                >
+                  {SETORES_FAZENDA.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="font-semibold text-slate-600 text-[11px]">Motorista / Portador Padrão</label>
                 <input
-                  type="range"
-                  min={zoomRange.min}
-                  max={zoomRange.max}
-                  step={zoomRange.step}
-                  value={zoomRange.current}
-                  onChange={(e) => handleCameraZoomChange(e.target.value)}
-                  className="w-full accent-emerald-500"
+                  type="text"
+                  placeholder="Aplicar a todas as notas..."
+                  value={batchGlobalConfig.portadorMotorista}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setBatchGlobalConfig(prev => ({ ...prev, portadorMotorista: val }));
+                    setBatchItems(prev => prev.map(it => ({ ...it, portadorMotorista: val })));
+                  }}
+                  className="w-full mt-0.5 px-2 py-1.5 border rounded-lg bg-white"
                 />
-                <span className="font-mono text-[11px] text-emerald-300 w-9 text-right">
-                  {Number(zoomRange.current).toFixed(1)}x
-                </span>
               </div>
-            )}
+              <div>
+                <label className="font-semibold text-slate-600 text-[11px]">Mercadoria foi c/ Nota?</label>
+                <select
+                  value={batchGlobalConfig.foiComNota}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setBatchGlobalConfig(prev => ({ ...prev, foiComNota: val }));
+                    setBatchItems(prev => prev.map(it => ({ ...it, foiComNota: val })));
+                  }}
+                  className="w-full mt-0.5 px-2 py-1.5 border rounded-lg bg-white font-semibold"
+                >
+                  <option value="SIM">SIM - Foi com a NF</option>
+                  <option value="NAO">NÃO - Sem NF física</option>
+                </select>
+              </div>
+            </div>
 
-            {cameraError && (
-              <p className="text-xs text-amber-300 text-center bg-amber-950/60 p-2 rounded-lg">{cameraError}</p>
-            )}
+            {/* LISTA DE NOTAS DO LOTE PARA CONFERÊNCIA POSTERIOR */}
+            <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+              {batchItems.map((bItem, idx) => (
+                <div
+                  key={bItem.tempId}
+                  className={`p-2.5 rounded-xl border transition ${
+                    bItem.status === 'PRONTO'
+                      ? 'bg-white border-slate-200'
+                      : bItem.status === 'ERRO'
+                        ? 'bg-red-50/60 border-red-200'
+                        : 'bg-slate-50 border-slate-200 opacity-80'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={bItem.selected}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setBatchItems(prev => prev.map((it, i) => i === idx ? { ...it, selected: checked } : it));
+                        }}
+                        className="w-4 h-4 accent-emerald-600 rounded"
+                      />
+                      <span className="font-bold text-slate-700">
+                        #{idx + 1} • {bItem.fileName}
+                      </span>
+                    </div>
 
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={capturePhotoFromVideo}
-                disabled={!cameraReady}
-                className="py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 shadow"
-              >
-                <Camera className="w-4 h-4" /> Capturar Foto
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  closeLiveCamera();
-                  nativeCameraInputRef.current?.click();
-                }}
-                className="py-3 bg-slate-800 hover:bg-slate-700 text-emerald-300 font-semibold rounded-xl text-xs flex items-center justify-center gap-1.5 border border-emerald-500/40"
-              >
-                <Camera className="w-4 h-4" /> Câmera Nativa (0.5x)
-              </button>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                      bItem.status === 'PRONTO' ? 'bg-emerald-100 text-emerald-800' :
+                      bItem.status === 'LENDO' ? 'bg-amber-100 text-amber-800' :
+                      bItem.status === 'ERRO' ? 'bg-red-100 text-red-800' :
+                      'bg-slate-200 text-slate-600'
+                    }`}>
+                      {bItem.status === 'PRONTO' ? `✓ Lida (${(bItem.itens || []).length} itens)` :
+                       bItem.status === 'LENDO' ? 'Lendo IA...' :
+                       bItem.status === 'ERRO' ? 'Preencher Manual' : 'Na fila'}
+                    </span>
+                  </div>
+
+                  {bItem.errorMsg && (
+                    <p className="text-[10px] text-red-600 mb-1.5">{bItem.errorMsg}</p>
+                  )}
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <div>
+                      <label className="text-[10px] text-slate-500 font-semibold">Nº da NF *</label>
+                      <input
+                        type="text"
+                        placeholder="Nº NF"
+                        value={bItem.numeroNF}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setBatchItems(prev => prev.map((it, i) => i === idx ? { ...it, numeroNF: val } : it));
+                        }}
+                        className="w-full px-2 py-1 border rounded bg-white"
+                      />
+                    </div>
+                    <div className="col-span-1 sm:col-span-2">
+                      <label className="text-[10px] text-slate-500 font-semibold">Fornecedor *</label>
+                      <input
+                        type="text"
+                        placeholder="Nome do Fornecedor"
+                        value={bItem.fornecedor}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setBatchItems(prev => prev.map((it, i) => i === idx ? { ...it, fornecedor: val } : it));
+                        }}
+                        className="w-full px-2 py-1 border rounded bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-slate-500 font-semibold">Valor Total (R$)</label>
+                      <input
+                        type="text"
+                        placeholder="0.00"
+                        value={bItem.valorTotal}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setBatchItems(prev => prev.map((it, i) => i === idx ? { ...it, valorTotal: val } : it));
+                        }}
+                        className="w-full px-2 py-1 border rounded bg-white font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  {bItem.chaveAcesso && (
+                    <div className="mt-1.5 text-[10px] font-mono text-slate-500 truncate">
+                      Chave: {bItem.chaveAcesso}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center justify-between pt-3 border-t border-slate-200">
+              <span className="text-slate-600 font-semibold">
+                {batchItems.filter(i => i.selected && i.numeroNF && i.fornecedor).length} nota(s) pronta(s) para salvar
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={batchProgress.active}
+                  onClick={() => setBatchQueueModalOpen(false)}
+                  className="px-4 py-2 border border-slate-300 rounded-xl font-semibold text-slate-700"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={batchProgress.active}
+                  onClick={handleSaveBatchAll}
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-400 text-white font-bold rounded-xl shadow-sm"
+                >
+                  Confirmar e Salvar Todas
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -2395,7 +3034,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
           <div className="bg-white rounded-2xl max-w-lg w-full p-4 shadow-xl space-y-4">
             <div className="flex items-center justify-between border-b pb-2">
               <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
-                <Users className="w-4 h-4 text-emerald-600" /> Cadastro de Utilizadores e Senhas
+                <Users className="w-4 h-4 text-emerald-600" /> Cadastro de Usuários e Senhas
               </h3>
               <button onClick={() => setUsersModalOpen(false)}><X className="w-5 h-5 text-slate-400" /></button>
             </div>
@@ -2513,7 +3152,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
             <Trash2 className="w-8 h-8 text-red-600 mx-auto" />
             <h3 className="text-sm font-bold text-slate-800">Zerar Base de Dados?</h3>
             <p className="text-xs text-slate-600">
-              Todos os {remessas.length} registos serão apagados permanentemente.
+              Todos os {remessas.length} registros serão apagados permanentemente.
             </p>
             <div className="flex justify-center gap-2 pt-2 text-xs">
               <button onClick={() => setClearDbModalOpen(false)} className="px-4 py-2 border rounded-lg">
