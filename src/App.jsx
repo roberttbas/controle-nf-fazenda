@@ -396,11 +396,147 @@ export default function App() {
   // ==========================================================================
   // LEITURA DE NOTA FISCAL COMPATÍVEL COM CHAVES DO PAINEL NEURAL
   // ==========================================================================
+  // ==========================================================================
+  // LEITURA DE NOTA FISCAL COM DESCOBERTA AUTOMÁTICA DE MODELOS (LISTMODELS)
+  // ==========================================================================
   const processDataUrlWithGemini = async (rawDataUrl, mimeType) => {
     setIsScanning(true);
     setLastAiError('');
-    setScanMessage('Otimizando imagem e lendo Nota Fiscal com IA...');
+    setScanMessage('Conectando à IA e lendo Nota Fiscal...');
 
+    try {
+      const optimizedUrl = await compressImageDataUrl(rawDataUrl);
+      const base64Data = optimizedUrl.split(',')[1];
+      const finalMime = optimizedUrl.startsWith('data:image/jpeg') ? 'image/jpeg' : mimeType;
+
+      const savedKey = (neuralMemory.customGeminiKey || '').trim();
+      const candidateKeys = [];
+      if (savedKey) candidateKeys.push(savedKey);
+      if (!candidateKeys.includes(firebaseConfig.apiKey)) candidateKeys.push(firebaseConfig.apiKey);
+
+      const prompt = `Extraia os dados desta Nota Fiscal brasileira (DANFE / NF-e) e retorne APENAS um JSON válido (sem blocos markdown) com estas chaves exatas:
+{
+  "numeroNF": "string",
+  "serieNF": "string",
+  "fornecedor": "string",
+  "cnpjFornecedor": "string",
+  "dataEmissaoNF": "YYYY-MM-DD",
+  "valorTotal": "numero com ponto ex 1450.50",
+  "resumoMercadoria": "resumo dos itens",
+  "chaveAcesso": "44 digitos"
+}`;
+
+      let parsedData = null;
+      const errorsLog = [];
+
+      outerLoop:
+      for (const keyToUse of candidateKeys) {
+        // 1. Pergunta à API quais modelos estão ativos para esta chave
+        let modelsToTry = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest', 'gemini-pro-vision'];
+        try {
+          const listRes = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(keyToUse)}`,
+            { headers: { 'x-goog-api-key': keyToUse } }
+          );
+          if (listRes.ok) {
+            const listJson = await listRes.json();
+            const available = (listJson.models || [])
+              .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
+              .map(m => m.name.replace('models/', ''))
+              .filter(name => name.includes('gemini') && !name.includes('embedding') && !name.includes('aqa'));
+
+            // Prioriza modelos flash/vision ativos na conta
+            available.sort((a, b) => {
+              const score = (n) => (n.includes('2.5-flash') ? 4 : n.includes('2.0-flash') ? 3 : n.includes('flash') ? 2 : 1);
+              return score(b) - score(a);
+            });
+
+            if (available.length > 0) {
+              modelsToTry = available.slice(0, 4);
+            }
+          }
+        } catch (e) {
+          console.warn('ListModels ignorado:', e);
+        }
+
+        // 2. Tenta gerar a leitura nos modelos descobertos
+        for (const modelName of modelsToTry) {
+          try {
+            const response = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(keyToUse)}`,
+              {
+                method: 'POST',
+                headers: { 
+                  'Content-Type': 'application/json',
+                  'x-goog-api-key': keyToUse
+                },
+                body: JSON.stringify({
+                  contents: [{
+                     parts: [
+                      { text: prompt },
+                      { inlineData: { mimeType: finalMime, data: base64Data } }
+                    ]
+                  }]
+                })
+              }
+            );
+
+            const resJson = await response.json();
+
+            if (!response.ok) {
+              const msg = resJson?.error?.message || `HTTP ${response.status}`;
+              errorsLog.push(`[${modelName}]: ${msg}`);
+              continue;
+            }
+
+            let rawText = resJson?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            if (!rawText) {
+              errorsLog.push(`[${modelName}]: Resposta vazia`);
+              continue;
+            }
+
+            // Extrai o JSON mesmo se o modelo devolver texto ao redor
+            const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+            const cleanJson = jsonMatch ? jsonMatch[0] : rawText;
+            parsedData = JSON.parse(cleanJson);
+            break outerLoop;
+          } catch (innerErr) {
+            errorsLog.push(`[${modelName}]: ${innerErr.message}`);
+          }
+        }
+      }
+
+      if (!parsedData) {
+        throw new Error(errorsLog.slice(0, 2).join(' | ') || 'API Gemini não respondeu');
+      }
+
+      const neuralFill = applyNeuralMemoryToSupplier(parsedData.fornecedor, parsedData.cnpjFornecedor);
+
+      setFormData(prev => ({
+        ...prev,
+        numeroNF: parsedData.numeroNF || prev.numeroNF,
+        serieNF: parsedData.serieNF || prev.serieNF,
+        fornecedor: parsedData.fornecedor || prev.fornecedor,
+        cnpjFornecedor: parsedData.cnpjFornecedor || prev.cnpjFornecedor,
+        dataEmissaoNF: parsedData.dataEmissaoNF || prev.dataEmissaoNF,
+        valorTotal: parsedData.valorTotal ? String(parsedData.valorTotal) : prev.valorTotal,
+        resumoMercadoria: parsedData.resumoMercadoria || prev.resumoMercadoria,
+        chaveAcesso: parsedData.chaveAcesso || prev.chaveAcesso,
+        setorDestino: neuralFill.setorDestino || prev.setorDestino,
+        portadorMotorista: neuralFill.portadorMotorista || prev.portadorMotorista,
+        anexoPreview: 'ANEXADO'
+      }));
+
+      showToast('Dados da NF extraídos automaticamente!');
+    } catch (err) {
+      console.error('Erro detalhado na leitura IA:', err);
+      setLastAiError(err.message || 'Erro desconhecido');
+      showToast('Falha na leitura automática. Veja o detalhe abaixo dos botões.', 'error');
+    } finally {
+      setIsScanning(false);
+      setScanMessage('');
+    }
+  };
     try {
       const optimizedUrl = await compressImageDataUrl(rawDataUrl);
       const base64Data = optimizedUrl.split(',')[1];
