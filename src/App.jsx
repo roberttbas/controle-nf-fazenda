@@ -34,7 +34,6 @@ import {
   LogOut,
   Maximize2,
   Minimize2,
-  Image as ImageIcon,
   Edit3,
   AlertTriangle,
   History,
@@ -205,6 +204,7 @@ export default function App() {
   const [almoxModalItem, setAlmoxModalItem] = useState(null);
   const [officeModalItem, setOfficeModalItem] = useState(null);
   const [comprasModalItem, setComprasModalItem] = useState(null);
+  const [semNotaModalItem, setSemNotaModalItem] = useState(null);
   const [historyModalItem, setHistoryModalItem] = useState(null);
   const [clearDbModalOpen, setClearDbModalOpen] = useState(false);
   const [usersModalOpen, setUsersModalOpen] = useState(false);
@@ -266,6 +266,7 @@ export default function App() {
     dataRetornoEscritorio: '',
     recebidoPorEscritorio: '',
     statusDivergenciaCompras: 'NENHUMA',
+    statusSemNotaCompras: 'NENHUMA', // NENHUMA | PENDENTE_COMPRAS | RESOLVIDO_COMPRAS
     historico: [],
     observacoes: '',
     anexoPreview: ''
@@ -289,6 +290,13 @@ export default function App() {
     itensRevisados: []
   });
 
+  const [semNotaConfirmData, setSemNotaConfirmData] = useState({
+    numeroNFRegularizada: '',
+    chaveAcessoRegularizada: '',
+    parecerSemNota: '',
+    marcarComNota: true
+  });
+
   const [newUserForm, setNewUserForm] = useState({
     name: '',
     role: 'compras',
@@ -304,6 +312,18 @@ export default function App() {
     if (!loggedUser) return ROLES_CONFIG.compras;
     return ROLES_CONFIG[loggedUser.role] || ROLES_CONFIG.compras;
   }, [loggedUser]);
+
+  // Verifica se o registro possui pendência de Sem NF para o Compras
+  const isItemPendingSemNota = (r) => {
+    if (r.statusSemNotaCompras === 'PENDENTE_COMPRAS') return true;
+    if (r.foiComNota === 'NAO' && r.statusSemNotaCompras !== 'RESOLVIDO_COMPRAS') return true;
+    return false;
+  };
+
+  // Verifica qualquer pendência do setor de Compras (Divergência de Qtd OU Sem NF física)
+  const isItemPendingComprasAny = (r) => {
+    return r.statusDivergenciaCompras === 'PENDENTE_COMPRAS' || isItemPendingSemNota(r);
+  };
 
   useEffect(() => {
     const initAuth = async () => {
@@ -686,7 +706,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
     const initialQueue = limitedFiles.map((f, idx) => ({
       tempId: `batch_${Date.now()}_${idx}`,
       fileName: f.name,
-      status: 'AGUARDANDO', // AGUARDANDO | LENDO | PRONTO | ERRO
+      status: 'AGUARDANDO',
       errorMsg: '',
       selected: true,
       numeroNF: '',
@@ -729,7 +749,6 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
           portadorMotorista: extracted.neuralFill?.portadorMotorista || item.portadorMotorista
         } : item));
 
-        // Pequena pausa entre notas para evitar bloqueio de pico na API gratuita
         if (i < limitedFiles.length - 1) {
           await sleepMs(650);
         }
@@ -738,7 +757,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
           ...item,
           status: 'ERRO',
           errorMsg: err.message || 'Falha ao ler nota',
-          selected: true // Permite preencher manualmente na própria fila
+          selected: true
         } : item));
       }
     }
@@ -761,10 +780,16 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
 
   const handleSaveBatchAll = async () => {
     if (!fbUser) return;
-    const toSave = batchItems.filter(it => it.selected && it.numeroNF.trim() !== '' && it.fornecedor.trim() !== '');
+    const toSave = batchItems.filter(it => {
+      if (!it.selected) return false;
+      if (!it.fornecedor.trim()) return false;
+      const isSemNF = (it.foiComNota || batchGlobalConfig.foiComNota) === 'NAO';
+      if (!isSemNF && !it.numeroNF.trim()) return false;
+      return true;
+    });
 
     if (toSave.length === 0) {
-      showToast('Preencha Nº da NF e Fornecedor nas notas selecionadas.', 'error');
+      showToast('Preencha os campos obrigatórios nas notas selecionadas.', 'error');
       return;
     }
 
@@ -778,17 +803,20 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
           ? cleanItens.map(i => `${i.quantidadeNF} ${i.unidade || 'UN'} - ${i.descricao}`).join(' | ')
           : item.resumoMercadoria;
 
+        const foiComNotaFinal = item.foiComNota || batchGlobalConfig.foiComNota || 'SIM';
+        const numeroNFFinal = item.numeroNF.trim() || (foiComNotaFinal === 'NAO' ? 'S/NF' : '');
+
         const historyEntry = {
           id: 'h_' + Date.now() + '_' + Math.random().toString(36).slice(2, 5),
           dataHora: nowIso,
           usuario: loggedUser?.name || 'Usuário',
           perfil: ROLES_CONFIG[loggedUser?.role]?.label || '',
-          acao: 'Despacho em Lote (Múltiplas NFs)',
-          detalhes: `NF ${item.numeroNF} (${item.fornecedor}) com ${cleanItens.length} item(ns). Chave: ${item.chaveAcesso || 'Não informada'}.`
+          acao: foiComNotaFinal === 'NAO' ? 'Despacho em Lote SEM NF (Pendência Compras)' : 'Despacho em Lote (Múltiplas NFs)',
+          detalhes: `NF ${numeroNFFinal} (${item.fornecedor}) com ${cleanItens.length} item(ns).`
         };
 
         await addDoc(colRef, {
-          numeroNF: item.numeroNF.trim(),
+          numeroNF: numeroNFFinal,
           serieNF: '',
           fornecedor: item.fornecedor.trim(),
           cnpjFornecedor: item.cnpjFornecedor || '',
@@ -800,7 +828,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
           dataEnvioFazenda: todayStr,
           portadorMotorista: item.portadorMotorista || batchGlobalConfig.portadorMotorista || '',
           setorDestino: item.setorDestino || batchGlobalConfig.setorDestino || 'Almoxarifado Central',
-          foiComNota: item.foiComNota || batchGlobalConfig.foiComNota || 'SIM',
+          foiComNota: foiComNotaFinal,
           statusAlmoxarifado: 'PENDENTE',
           dataRecebimentoAlmox: '',
           recebidoPorAlmox: '',
@@ -808,6 +836,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
           dataRetornoEscritorio: '',
           recebidoPorEscritorio: '',
           statusDivergenciaCompras: 'NENHUMA',
+          statusSemNotaCompras: foiComNotaFinal === 'NAO' ? 'PENDENTE_COMPRAS' : 'NENHUMA',
           historico: [historyEntry],
           observacoes: '',
           anexoPreview: 'ANEXADO_LOTE',
@@ -819,7 +848,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
 
       setBatchQueueModalOpen(false);
       setBatchItems([]);
-      showToast(`${toSave.length} Nota(s) Fiscal(is) salva(s) com sucesso!`);
+      showToast(`${toSave.length} registro(s) salvo(s) com sucesso!`);
     } catch (err) {
       console.error(err);
       showToast('Erro ao salvar lote de notas.', 'error');
@@ -867,11 +896,20 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
     }));
   };
 
+  // ==========================================================================
+  // SALVAR DESPACHO (PERMITE SALVAR SEM Nº DA NF QUANDO "NÃO - SEM NF FÍSICA")
+  // ==========================================================================
   const handleSaveRemessa = async (e) => {
     e.preventDefault();
     if (!fbUser) return;
-    if (!formData.numeroNF || !formData.fornecedor) {
-      showToast('Informe o Nº da NF e o Fornecedor.', 'error');
+
+    const isSemNF = formData.foiComNota === 'NAO';
+    if (!formData.fornecedor || !formData.fornecedor.trim()) {
+      showToast('Informe o nome do Fornecedor.', 'error');
+      return;
+    }
+    if (!isSemNF && (!formData.numeroNF || !formData.numeroNF.trim())) {
+      showToast('Informe o Nº da NF (ou marque "NÃO - Sem NF física").', 'error');
       return;
     }
 
@@ -882,23 +920,39 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
         ? cleanItens.map(i => `${i.quantidadeNF} ${i.unidade || 'UN'} - ${i.descricao}`).join(' | ')
         : formData.resumoMercadoria;
 
+      const numeroNFFinal = (formData.numeroNF || '').trim() || (isSemNF ? 'S/NF' : '');
+
+      // Define o status da pendência Sem NF para o setor de Compras
+      let nextStatusSemNota = 'NENHUMA';
+      if (isSemNF) {
+        nextStatusSemNota = formData.statusSemNotaCompras === 'RESOLVIDO_COMPRAS'
+          ? 'RESOLVIDO_COMPRAS'
+          : 'PENDENTE_COMPRAS';
+      }
+
       const nowIso = new Date().toISOString();
       const historyEntry = {
         id: 'h_' + Date.now(),
         dataHora: nowIso,
         usuario: loggedUser?.name || 'Usuário',
         perfil: ROLES_CONFIG[loggedUser?.role]?.label || '',
-        acao: editingId ? 'Edição do Registro da NF' : 'Despacho / Cadastro Inicial da NF',
-        detalhes: `NF ${formData.numeroNF} (${formData.fornecedor}) com ${cleanItens.length} item(ns). Chave: ${formData.chaveAcesso || 'Não informada'}.`
+        acao: editingId
+          ? 'Edição do Registro da NF'
+          : isSemNF
+            ? 'Despacho SEM NF Física (Pendência gerada p/ Compras)'
+            : 'Despacho / Cadastro Inicial da NF',
+        detalhes: `NF: ${numeroNFFinal} | Fornecedor: ${formData.fornecedor} | Setor: ${formData.setorDestino} | Portador: ${formData.portadorMotorista || '-'} | ${cleanItens.length} item(ns).`
       };
 
       const payload = {
         ...formData,
+        numeroNF: numeroNFFinal,
         chaveAcesso: String(formData.chaveAcesso || '').replace(/\D/g, ''),
         itens: cleanItens,
         resumoMercadoria: autoResumo,
         valorTotal: parseFloat(String(formData.valorTotal).replace(',', '.')) || 0,
-        lancadoPor: loggedUser?.name || 'Usuário',
+        statusSemNotaCompras: nextStatusSemNota,
+        lancadoPor: formData.lancadoPor || loggedUser?.name || 'Usuário',
         historico: [...(formData.historico || []), historyEntry],
         updatedAt: Date.now()
       };
@@ -908,7 +962,11 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
         showToast('Registro atualizado!');
       } else {
         await addDoc(colRef, { ...payload, createdAt: Date.now() });
-        showToast('Despacho registrado com sucesso!');
+        if (isSemNF) {
+          showToast('Despacho Sem NF registrado! Pendência enviada ao Compras.', 'error');
+        } else {
+          showToast('Despacho registrado com sucesso!');
+        }
       }
 
       await learnFromSavedDispatch(formData);
@@ -916,6 +974,62 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
     } catch (err) {
       console.error(err);
       showToast('Erro ao salvar no banco.', 'error');
+    }
+  };
+
+  // ==========================================================================
+  // RESOLUÇÃO DA PENDÊNCIA DE MERCADORIA SEM NF PELO SETOR DE COMPRAS
+  // ==========================================================================
+  const openSemNotaModalForItem = (item) => {
+    setSemNotaConfirmData({
+      numeroNFRegularizada: item.numeroNF && item.numeroNF !== 'S/NF' ? item.numeroNF : '',
+      chaveAcessoRegularizada: item.chaveAcesso || '',
+      parecerSemNota: item.parecerSemNotaCompras || '',
+      marcarComNota: true
+    });
+    setSemNotaModalItem(item);
+  };
+
+  const handleResolveSemNotaCompras = async (e) => {
+    e.preventDefault();
+    if (!semNotaModalItem) return;
+
+    try {
+      const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'remessas_nf', semNotaModalItem.id);
+      const nfInformada = (semNotaConfirmData.numeroNFRegularizada || '').trim();
+      const chaveLimpa = String(semNotaConfirmData.chaveAcessoRegularizada || '').replace(/\D/g, '');
+      const numeroFinal = nfInformada || semNotaModalItem.numeroNF || 'S/NF';
+      const passaParaComNota = semNotaConfirmData.marcarComNota && nfInformada !== '';
+
+      const novoHistorico = [
+        ...(semNotaModalItem.historico || []),
+        {
+          id: 'h_' + Date.now(),
+          dataHora: new Date().toISOString(),
+          usuario: loggedUser?.name || 'Compras',
+          perfil: ROLES_CONFIG[loggedUser?.role]?.label || 'Compras',
+          acao: 'Pendência de Mercadoria Sem NF Resolvida pelo Compras',
+          detalhes: `NF Regularizada: ${numeroFinal}${chaveLimpa ? ` | Chave: ${chaveLimpa}` : ''}${semNotaConfirmData.parecerSemNota ? ` | Providência: ${semNotaConfirmData.parecerSemNota}` : ''}`
+        }
+      ];
+
+      await updateDoc(docRef, {
+        numeroNF: numeroFinal,
+        chaveAcesso: chaveLimpa || semNotaModalItem.chaveAcesso || '',
+        foiComNota: passaParaComNota ? 'SIM' : semNotaModalItem.foiComNota,
+        statusSemNotaCompras: 'RESOLVIDO_COMPRAS',
+        parecerSemNotaCompras: semNotaConfirmData.parecerSemNota || 'Pendência Sem NF resolvida pelo Compras',
+        resolvidoSemNotaPor: loggedUser?.name || 'Compras',
+        dataResolucaoSemNota: todayStr,
+        historico: novoHistorico,
+        updatedAt: Date.now()
+      });
+
+      setSemNotaModalItem(null);
+      showToast('Pendência de mercadoria Sem NF resolvida com sucesso!');
+    } catch (err) {
+      console.error(err);
+      showToast('Erro ao confirmar resolução da pendência.', 'error');
     }
   };
 
@@ -941,6 +1055,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
       dataRetornoEscritorio: '',
       recebidoPorEscritorio: '',
       statusDivergenciaCompras: 'NENHUMA',
+      statusSemNotaCompras: 'NENHUMA',
       historico: [],
       observacoes: '',
       anexoPreview: ''
@@ -1173,12 +1288,12 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
   const stats = useMemo(() => {
     const total = remessas.length;
     const pendAlmox = remessas.filter(r => r.statusAlmoxarifado !== 'RECEBIDO').length;
-    const pendCompras = remessas.filter(r => r.statusDivergenciaCompras === 'PENDENTE_COMPRAS').length;
+    const pendCompras = remessas.filter(r => isItemPendingComprasAny(r)).length;
     const pendOffice = remessas.filter(r => r.statusRetornoEscritorio !== 'RECEBIDO').length;
     const concluidos = remessas.filter(
       r => r.statusAlmoxarifado === 'RECEBIDO' && 
            r.statusRetornoEscritorio === 'RECEBIDO' && 
-           r.statusDivergenciaCompras !== 'PENDENTE_COMPRAS'
+           !isItemPendingComprasAny(r)
     ).length;
     return { total, pendAlmox, pendCompras, pendOffice, concluidos };
   }, [remessas]);
@@ -1190,7 +1305,6 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
     return remessas.filter(r => {
       const itensStr = (r.itens || []).map(i => i.descricao).join(' ');
 
-      // 1. Busca Rápida Geral
       if (searchTerm.trim() !== '') {
         const term = searchTerm.toLowerCase();
         const matchesQuick = 
@@ -1203,7 +1317,6 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
         if (!matchesQuick) return false;
       }
 
-      // 2. Filtros da Aba de Pesquisa Avançada
       if (advFilters.numeroNF.trim() !== '') {
         if (!(r.numeroNF || '').toLowerCase().includes(advFilters.numeroNF.trim().toLowerCase())) return false;
       }
@@ -1230,14 +1343,13 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
         if (advFilters.dataFim && targetDate > advFilters.dataFim) return false;
       }
 
-      // 3. Filtro de Status nas Abas
       if (statusFilter === 'PEND_ALMOX') return r.statusAlmoxarifado !== 'RECEBIDO';
-      if (statusFilter === 'PEND_COMPRAS') return r.statusDivergenciaCompras === 'PENDENTE_COMPRAS';
+      if (statusFilter === 'PEND_COMPRAS') return isItemPendingComprasAny(r);
       if (statusFilter === 'PEND_ESCRITORIO') return r.statusRetornoEscritorio !== 'RECEBIDO';
       if (statusFilter === 'CONCLUIDO') {
         return r.statusAlmoxarifado === 'RECEBIDO' && 
                r.statusRetornoEscritorio === 'RECEBIDO' && 
-               r.statusDivergenciaCompras !== 'PENDENTE_COMPRAS';
+               !isItemPendingComprasAny(r);
       }
       return true;
     });
@@ -1287,10 +1399,11 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
       'Data Envio Fazenda',
       'Motorista / Portador',
       'Foi com Nota',
+      'Status Sem NF (Compras)',
       'Status Almoxarifado',
       'Data Receb. Almoxarifado',
       'Recebido Por Almox.',
-      'Status Divergencia Compras',
+      'Status Divergencia Qtd Compras',
       'Parecer Compras',
       'Status Retorno Escritorio',
       'Data Retorno Escritorio',
@@ -1313,24 +1426,24 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
         escapeCsv(formatDateBR(r.dataEmissaoNF)),
         escapeCsv(r.fornecedor),
         escapeCsv(valorBR),
-        escapeCsv(`'${r.chaveAcesso || ''}`), // Apóstrofo evita que o Excel converta os 44 dígitos em notação científica
+        escapeCsv(`'${r.chaveAcesso || ''}`),
         escapeCsv(itensFormatados),
         escapeCsv(r.setorDestino),
         escapeCsv(formatDateBR(r.dataEnvioFazenda)),
         escapeCsv(r.portadorMotorista),
         escapeCsv(r.foiComNota),
+        escapeCsv(isItemPendingSemNota(r) ? 'PENDENTE_COMPRAS' : (r.statusSemNotaCompras || 'OK')),
         escapeCsv(r.statusAlmoxarifado),
         escapeCsv(formatDateBR(r.dataRecebimentoAlmox)),
         escapeCsv(r.recebidoPorAlmox),
         escapeCsv(r.statusDivergenciaCompras || 'NENHUMA'),
-        escapeCsv(r.parecerCompras || ''),
+        escapeCsv(r.parecerCompras || r.parecerSemNotaCompras || ''),
         escapeCsv(r.statusRetornoEscritorio),
         escapeCsv(formatDateBR(r.dataRetornoEscritorio)),
         escapeCsv(r.recebidoPorEscritorio)
       ].join(';');
     });
 
-    // BOM UTF-8 (\uFEFF) garante acentuação perfeita ao abrir direto no Microsoft Excel
     const csvContent = '\uFEFF' + headers.join(';') + '\r\n' + rows.join('\r\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -1369,7 +1482,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
       return `
         <tr>
           <td>
-            <strong>NF ${r.numeroNF}</strong><br/>
+            <strong>NF ${r.numeroNF || 'S/NF'}</strong> (${r.foiComNota === 'SIM' ? 'Com NF' : 'Sem NF'})<br/>
             <span style="font-size:10px;color:#555;">Emissão: ${formatDateBR(r.dataEmissaoNF)}</span><br/>
             <strong style="color:#047857;">${Number(r.valorTotal || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</strong>
           </td>
@@ -1387,6 +1500,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
             <strong>${r.statusAlmoxarifado}</strong><br/>
             ${r.statusAlmoxarifado === 'RECEBIDO' ? `${formatDateBR(r.dataRecebimentoAlmox)} (${r.recebidoPorAlmox})` : 'Pendente'}
             ${r.statusDivergenciaCompras === 'PENDENTE_COMPRAS' ? '<div style="color:#b91c1c;font-weight:bold;margin-top:2px;">⚠ Divergência Qtd</div>' : ''}
+            ${isItemPendingSemNota(r) ? '<div style="color:#b45309;font-weight:bold;margin-top:2px;">⚠ Pendente NF (Compras)</div>' : ''}
           </td>
           <td>
             <strong>${r.statusRetornoEscritorio}</strong><br/>
@@ -1440,7 +1554,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
               <th style="width:20%;">Fornecedor / Chave</th>
               <th style="width:28%;">Itens Individuais (NF vs Recebido)</th>
               <th style="width:14%;">Setor / Envio</th>
-              <th style="width:13%;">1. Almoxarifado</th>
+              <th style="width:13%;">1. Almoxarifado / Compras</th>
               <th style="width:13%;">2. Escritório</th>
             </tr>
           </thead>
@@ -1492,7 +1606,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
               <FileText className="w-6 h-6" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-slate-800 leading-tight">Controle de NFs v2.4</h1>
+              <h1 className="text-lg font-bold text-slate-800 leading-tight">Controle de NFs v2.5</h1>
               <p className="text-xs text-slate-500">Selecione o seu perfil para entrar</p>
             </div>
           </div>
@@ -1574,7 +1688,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
             </button>
             <div className="truncate">
               <div className="flex items-center gap-1.5">
-                <span className="font-bold text-sm text-slate-800 truncate">Controle NFs <span className="text-[10px] text-emerald-600 font-mono">v2.4</span></span>
+                <span className="font-bold text-sm text-slate-800 truncate">Controle NFs <span className="text-[10px] text-emerald-600 font-mono">v2.5</span></span>
                 <span className="px-2 py-0.5 text-[11px] font-semibold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 truncate">
                   {loggedUser.name}
                 </span>
@@ -1756,7 +1870,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
           />
         </div>
 
-        {/* ABA / PAINEL DE PESQUISA AVANÇADA (POR DATA, Nº NF, FORNECEDOR, ITEM DA PEÇA) */}
+        {/* ABA / PAINEL DE PESQUISA AVANÇADA */}
         {showAdvancedSearch && (
           <div className="bg-white border border-emerald-200 rounded-2xl p-3.5 shadow-sm space-y-3 text-xs">
             <div className="flex items-center justify-between border-b border-slate-100 pb-2">
@@ -1880,202 +1994,235 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
           </div>
         ) : (
           <>
-            {/* VISÃO MOBILE (CARDS COM ITENS INDIVIDUAIS E CHAVE) */}
+            {/* VISÃO MOBILE (CARDS COM ITENS INDIVIDUAIS, CHAVE E PENDÊNCIA SEM NF) */}
             <div className="grid grid-cols-1 gap-2.5 md:hidden">
-              {filteredRemessas.map(item => (
-                <div key={item.id} className="bg-white rounded-xl border border-slate-200 p-3 shadow-sm space-y-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="font-bold text-sm text-slate-900">NF {item.numeroNF}</span>
-                        <span className={`px-1.5 py-0.5 text-[10px] font-bold rounded ${
-                          item.foiComNota === 'SIM' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'
-                        }`}>
-                          {item.foiComNota === 'SIM' ? 'Com NF' : 'Sem NF'}
+              {filteredRemessas.map(item => {
+                const pendSemNF = isItemPendingSemNota(item);
+                return (
+                  <div key={item.id} className="bg-white rounded-xl border border-slate-200 p-3 shadow-sm space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-bold text-sm text-slate-900">
+                            {item.numeroNF && item.numeroNF !== 'S/NF' ? `NF ${item.numeroNF}` : 'Mercadoria S/ NF'}
+                          </span>
+                          <span className={`px-1.5 py-0.5 text-[10px] font-bold rounded ${
+                            item.foiComNota === 'SIM' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-100 text-amber-800'
+                          }`}>
+                            {item.foiComNota === 'SIM' ? 'Com NF' : 'Sem NF Física'}
+                          </span>
+                          {pendSemNF && (
+                            <span className="px-1.5 py-0.5 text-[10px] font-bold rounded bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-0.5">
+                              <AlertTriangle className="w-3 h-3" /> Pendente NF (Compras)
+                            </span>
+                          )}
+                          {item.statusSemNotaCompras === 'RESOLVIDO_COMPRAS' && (
+                            <span className="px-1.5 py-0.5 text-[10px] font-bold rounded bg-emerald-100 text-emerald-800">
+                              ✓ NF Regularizada Compras
+                            </span>
+                          )}
+                          {item.statusDivergenciaCompras === 'PENDENTE_COMPRAS' && (
+                            <span className="px-1.5 py-0.5 text-[10px] font-bold rounded bg-red-100 text-red-700 flex items-center gap-0.5">
+                              <AlertTriangle className="w-3 h-3" /> Divergência Qtd
+                            </span>
+                          )}
+                          {item.statusDivergenciaCompras === 'APROVADA_COMPRAS' && (
+                            <span className="px-1.5 py-0.5 text-[10px] font-bold rounded bg-purple-100 text-purple-700">
+                              Qtd Validada Compras
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs font-semibold text-slate-700 truncate max-w-[240px]">{item.fornecedor}</p>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-xs font-bold text-slate-800">
+                          {Number(item.valorTotal || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                         </span>
-                        {item.statusDivergenciaCompras === 'PENDENTE_COMPRAS' && (
-                          <span className="px-1.5 py-0.5 text-[10px] font-bold rounded bg-red-100 text-red-700 flex items-center gap-0.5">
-                            <AlertTriangle className="w-3 h-3" /> Divergência Qtd
-                          </span>
-                        )}
-                        {item.statusDivergenciaCompras === 'APROVADA_COMPRAS' && (
-                          <span className="px-1.5 py-0.5 text-[10px] font-bold rounded bg-purple-100 text-purple-700">
-                            Qtd Validada Compras
-                          </span>
-                        )}
+                        <p className="text-[10px] text-slate-400">Envio: {formatDateBR(item.dataEnvioFazenda)}</p>
                       </div>
-                      <p className="text-xs font-semibold text-slate-700 truncate max-w-[240px]">{item.fornecedor}</p>
                     </div>
-                    <div className="text-right">
-                      <span className="text-xs font-bold text-slate-800">
-                        {Number(item.valorTotal || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                      </span>
-                      <p className="text-[10px] text-slate-400">Envio: {formatDateBR(item.dataEnvioFazenda)}</p>
-                    </div>
-                  </div>
 
-                  {/* CHAVE DE ACESSO DA NF */}
-                  {item.chaveAcesso && (
-                    <div className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-[10px] font-mono text-slate-600">
-                      <span className="truncate"><Key className="w-3 h-3 inline mr-1 text-emerald-600" />{item.chaveAcesso}</span>
-                      <button
-                        type="button"
-                        onClick={() => copyChaveToClipboard(item.chaveAcesso)}
-                        className="ml-2 text-emerald-700 font-sans font-bold flex items-center gap-0.5 shrink-0"
-                      >
-                        <Copy className="w-3 h-3" /> Copiar
-                      </button>
-                    </div>
-                  )}
-
-                  {/* LISTA DE ITENS INDIVIDUAIS */}
-                  {Array.isArray(item.itens) && item.itens.length > 0 ? (
-                    <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-2 space-y-1">
-                      <div className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-1">
-                        <Package className="w-3 h-3" /> Itens da Nota ({item.itens.length})
+                    {/* CHAVE DE ACESSO DA NF */}
+                    {item.chaveAcesso && (
+                      <div className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-[10px] font-mono text-slate-600">
+                        <span className="truncate"><Key className="w-3 h-3 inline mr-1 text-emerald-600" />{item.chaveAcesso}</span>
+                        <button
+                          type="button"
+                          onClick={() => copyChaveToClipboard(item.chaveAcesso)}
+                          className="ml-2 text-emerald-700 font-sans font-bold flex items-center gap-0.5 shrink-0"
+                        >
+                          <Copy className="w-3 h-3" /> Copiar
+                        </button>
                       </div>
-                      {item.itens.map((it, idx) => {
-                        const isDiff = Number(it.quantidadeRecebida ?? it.quantidadeNF) !== Number(it.quantidadeNF);
-                        return (
-                          <div key={it.id || idx} className="flex items-center justify-between text-xs border-b last:border-b-0 border-slate-200/60 py-1 gap-2">
-                            <span className="text-slate-700 font-medium truncate">{it.descricao}</span>
-                            <div className="shrink-0 flex items-center gap-1 font-mono text-[11px]">
-                              <span className="px-1.5 py-0.5 rounded bg-white border border-slate-200 text-slate-700">
-                                NF: {it.quantidadeNF} {it.unidade || 'UN'}
-                              </span>
-                              {item.statusAlmoxarifado === 'RECEBIDO' && (
-                                <span className={`px-1.5 py-0.5 rounded font-bold ${
-                                  isDiff ? 'bg-red-100 text-red-700 border border-red-300' : 'bg-emerald-100 text-emerald-800'
-                                }`}>
-                                  Rec: {it.quantidadeRecebida ?? it.quantidadeNF}
+                    )}
+
+                    {/* LISTA DE ITENS INDIVIDUAIS */}
+                    {Array.isArray(item.itens) && item.itens.length > 0 ? (
+                      <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-2 space-y-1">
+                        <div className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-1">
+                          <Package className="w-3 h-3" /> Itens Enviados ({item.itens.length})
+                        </div>
+                        {item.itens.map((it, idx) => {
+                          const isDiff = Number(it.quantidadeRecebida ?? it.quantidadeNF) !== Number(it.quantidadeNF);
+                          return (
+                            <div key={it.id || idx} className="flex items-center justify-between text-xs border-b last:border-b-0 border-slate-200/60 py-1 gap-2">
+                              <span className="text-slate-700 font-medium truncate">{it.descricao}</span>
+                              <div className="shrink-0 flex items-center gap-1 font-mono text-[11px]">
+                                <span className="px-1.5 py-0.5 rounded bg-white border border-slate-200 text-slate-700">
+                                  Qtd: {it.quantidadeNF} {it.unidade || 'UN'}
                                 </span>
-                              )}
+                                {item.statusAlmoxarifado === 'RECEBIDO' && (
+                                  <span className={`px-1.5 py-0.5 rounded font-bold ${
+                                    isDiff ? 'bg-red-100 text-red-700 border border-red-300' : 'bg-emerald-100 text-emerald-800'
+                                  }`}>
+                                    Rec: {it.quantidadeRecebida ?? it.quantidadeNF}
+                                  </span>
+                                )}
+                              </div>
                             </div>
-                          </div>
-                        );
-                      })}
+                          );
+                        })}
+                      </div>
+                    ) : item.resumoMercadoria ? (
+                      <p className="text-xs text-slate-600 bg-slate-50 p-2 rounded-lg line-clamp-2">
+                        {item.resumoMercadoria}
+                      </p>
+                    ) : null}
+
+                    <div className="flex items-center justify-between text-[11px] text-slate-500">
+                      <span>Setor: <strong className="text-slate-700">{item.setorDestino}</strong></span>
+                      <span>Portador: <strong className="text-slate-700">{item.portadorMotorista || '-'}</strong></span>
                     </div>
-                  ) : item.resumoMercadoria ? (
-                    <p className="text-xs text-slate-600 bg-slate-50 p-2 rounded-lg line-clamp-2">
-                      {item.resumoMercadoria}
-                    </p>
-                  ) : null}
 
-                  <div className="flex items-center justify-between text-[11px] text-slate-500">
-                    <span>Setor: <strong className="text-slate-700">{item.setorDestino}</strong></span>
-                    <span>Portador: <strong className="text-slate-700">{item.portadorMotorista || '-'}</strong></span>
-                  </div>
-
-                  {/* BOTÃO DE PENDÊNCIA COMPRAS SE HOUVER DIVERGÊNCIA */}
-                  {item.statusDivergenciaCompras === 'PENDENTE_COMPRAS' && (
-                    <button
-                      disabled={!currentPermissions.canApproveDivergence}
-                      onClick={() => {
-                        setComprasConfirmData({
-                          parecerCompras: item.parecerCompras || '',
-                          itensRevisados: (item.itens || []).map(i => ({ ...i }))
-                        });
-                        setComprasModalItem(item);
-                      }}
-                      className={`w-full py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 ${
-                        currentPermissions.canApproveDivergence
-                          ? 'bg-red-600 hover:bg-red-700 text-white shadow-sm'
-                          : 'bg-red-50 text-red-500 border border-red-200 cursor-not-allowed'
-                      }`}
-                    >
-                      <AlertTriangle className="w-4 h-4" />
-                      {currentPermissions.canApproveDivergence
-                        ? 'Confirmar Alteração de Quantidade (Compras)'
-                        : 'Aguardando Confirmação do Compras'}
-                    </button>
-                  )}
-
-                  <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-100">
-                    {item.statusAlmoxarifado === 'RECEBIDO' ? (
-                      <div
-                        onClick={() => currentPermissions.canConfirmAlmox && openAlmoxModalForItem(item)}
-                        className="bg-emerald-50 border border-emerald-200 rounded-lg p-1.5 text-center cursor-pointer"
-                      >
-                        <div className="text-[10px] font-bold text-emerald-800 flex items-center justify-center gap-1">
-                          <CheckCircle2 className="w-3 h-3" /> Almoxarifado OK
-                        </div>
-                        <div className="text-[10px] text-emerald-700">
-                          {formatDateBR(item.dataRecebimentoAlmox)} • {item.recebidoPorAlmox}
-                        </div>
-                      </div>
-                    ) : (
+                    {/* BOTÃO DE PENDÊNCIA COMPRAS: MERCADORIA ENVIADA SEM NF FÍSICA */}
+                    {pendSemNF && (
                       <button
-                        disabled={!currentPermissions.canConfirmAlmox}
-                        onClick={() => openAlmoxModalForItem(item)}
-                        className={`py-2 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 ${
-                          currentPermissions.canConfirmAlmox
-                            ? 'bg-emerald-600 text-white shadow-sm'
-                            : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                        disabled={!currentPermissions.canApproveDivergence}
+                        onClick={() => openSemNotaModalForItem(item)}
+                        className={`w-full py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 ${
+                          currentPermissions.canApproveDivergence
+                            ? 'bg-amber-600 hover:bg-amber-700 text-white shadow-sm'
+                            : 'bg-amber-50 text-amber-700 border border-amber-200 cursor-not-allowed'
                         }`}
                       >
-                        <Warehouse className="w-3.5 h-3.5" /> Conferir Itens Almox.
+                        <AlertTriangle className="w-4 h-4" />
+                        {currentPermissions.canApproveDivergence
+                          ? 'Resolver Pendência Sem NF (Compras)'
+                          : 'Aguardando Regularização de NF (Compras)'}
                       </button>
                     )}
 
-                    {item.statusRetornoEscritorio === 'RECEBIDO' ? (
-                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-1.5 text-center">
-                        <div className="text-[10px] font-bold text-blue-800 flex items-center justify-center gap-1">
-                          <CheckCircle2 className="w-3 h-3" /> Escritório OK
-                        </div>
-                        <div className="text-[10px] text-blue-700">
-                          {formatDateBR(item.dataRetornoEscritorio)} • {item.recebidoPorEscritorio}
-                        </div>
-                      </div>
-                    ) : (
+                    {/* BOTÃO DE PENDÊNCIA COMPRAS SE HOUVER DIVERGÊNCIA DE QUANTIDADE */}
+                    {item.statusDivergenciaCompras === 'PENDENTE_COMPRAS' && (
                       <button
-                        disabled={!currentPermissions.canConfirmOffice}
+                        disabled={!currentPermissions.canApproveDivergence}
                         onClick={() => {
-                          setOfficeConfirmData({
-                            dataRetornoEscritorio: todayStr,
-                            recebidoPorEscritorio: loggedUser.name,
-                            observacoes: item.observacoes || ''
+                          setComprasConfirmData({
+                            parecerCompras: item.parecerCompras || '',
+                            itensRevisados: (item.itens || []).map(i => ({ ...i }))
                           });
-                          setOfficeModalItem(item);
+                          setComprasModalItem(item);
                         }}
-                        className={`py-2 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 ${
-                          currentPermissions.canConfirmOffice
-                            ? 'bg-blue-600 text-white shadow-sm'
-                            : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                        className={`w-full py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 ${
+                          currentPermissions.canApproveDivergence
+                            ? 'bg-red-600 hover:bg-red-700 text-white shadow-sm'
+                            : 'bg-red-50 text-red-500 border border-red-200 cursor-not-allowed'
                         }`}
                       >
-                        <Building2 className="w-3.5 h-3.5" /> Confirmar Escritório
+                        <AlertTriangle className="w-4 h-4" />
+                        {currentPermissions.canApproveDivergence
+                          ? 'Confirmar Alteração de Quantidade (Compras)'
+                          : 'Aguardando Confirmação do Compras'}
                       </button>
                     )}
-                  </div>
 
-                  <div className="flex items-center justify-between pt-1 border-t border-slate-100 text-xs">
-                    <button
-                      type="button"
-                      onClick={() => setHistoryModalItem(item)}
-                      className="text-slate-600 hover:text-slate-900 font-semibold flex items-center gap-1 text-[11px]"
-                    >
-                      <History className="w-3.5 h-3.5 text-slate-500" />
-                      Histórico ({(item.historico || []).length})
-                    </button>
-                    <div className="flex items-center gap-2">
+                    <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-100">
+                      {item.statusAlmoxarifado === 'RECEBIDO' ? (
+                        <div
+                          onClick={() => currentPermissions.canConfirmAlmox && openAlmoxModalForItem(item)}
+                          className="bg-emerald-50 border border-emerald-200 rounded-lg p-1.5 text-center cursor-pointer"
+                        >
+                          <div className="text-[10px] font-bold text-emerald-800 flex items-center justify-center gap-1">
+                            <CheckCircle2 className="w-3 h-3" /> Almoxarifado OK
+                          </div>
+                          <div className="text-[10px] text-emerald-700">
+                            {formatDateBR(item.dataRecebimentoAlmox)} • {item.recebidoPorAlmox}
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          disabled={!currentPermissions.canConfirmAlmox}
+                          onClick={() => openAlmoxModalForItem(item)}
+                          className={`py-2 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 ${
+                            currentPermissions.canConfirmAlmox
+                              ? 'bg-emerald-600 text-white shadow-sm'
+                              : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                          }`}
+                        >
+                          <Warehouse className="w-3.5 h-3.5" /> Conferir Itens Almox.
+                        </button>
+                      )}
+
+                      {item.statusRetornoEscritorio === 'RECEBIDO' ? (
+                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-1.5 text-center">
+                          <div className="text-[10px] font-bold text-blue-800 flex items-center justify-center gap-1">
+                            <CheckCircle2 className="w-3 h-3" /> Escritório OK
+                          </div>
+                          <div className="text-[10px] text-blue-700">
+                            {formatDateBR(item.dataRetornoEscritorio)} • {item.recebidoPorEscritorio}
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          disabled={!currentPermissions.canConfirmOffice}
+                          onClick={() => {
+                            setOfficeConfirmData({
+                              dataRetornoEscritorio: todayStr,
+                              recebidoPorEscritorio: loggedUser.name,
+                              observacoes: item.observacoes || ''
+                            });
+                            setOfficeModalItem(item);
+                          }}
+                          className={`py-2 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 ${
+                            currentPermissions.canConfirmOffice
+                              ? 'bg-blue-600 text-white shadow-sm'
+                              : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                          }`}
+                        >
+                          <Building2 className="w-3.5 h-3.5" /> Confirmar Escritório
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="flex items-center justify-between pt-1 border-t border-slate-100 text-xs">
                       <button
                         type="button"
-                        onClick={() => {
-                          setFormData({ ...item, itens: item.itens || [] });
-                          setEditingId(item.id);
-                          setIsFormOpen(true);
-                        }}
-                        className="text-slate-500 hover:text-slate-800 flex items-center gap-1 text-[11px]"
+                        onClick={() => setHistoryModalItem(item)}
+                        className="text-slate-600 hover:text-slate-900 font-semibold flex items-center gap-1 text-[11px]"
                       >
-                        <Edit3 className="w-3.5 h-3.5" /> Editar
+                        <History className="w-3.5 h-3.5 text-slate-500" />
+                        Histórico ({(item.historico || []).length})
                       </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setFormData({ ...item, itens: item.itens || [] });
+                            setEditingId(item.id);
+                            setIsFormOpen(true);
+                          }}
+                          className="text-slate-500 hover:text-slate-800 flex items-center gap-1 text-[11px]"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" /> Editar
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
-            {/* VISÃO DESKTOP (TABELA COMPLETA COM ITENS, CHAVE E HISTÓRICO) */}
+            {/* VISÃO DESKTOP (TABELA COMPLETA COM ITENS, CHAVE E PENDÊNCIAS COMPRAS) */}
             <div className="hidden md:block bg-white rounded-2xl border border-slate-200 shadow-sm overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
@@ -2083,204 +2230,234 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
                     <th className="py-3 px-3">NF / Chave</th>
                     <th className="py-3 px-3">Fornecedor & Itens Individuais</th>
                     <th className="py-3 px-3">Envio / Destino</th>
-                    <th className="py-3 px-3">1. Conferência Almoxarifado</th>
+                    <th className="py-3 px-3">1. Conferência Almox. & Compras</th>
                     <th className="py-3 px-3">2. Retorno Escritório</th>
                     <th className="py-3 px-3 text-right">Histórico / Ações</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 text-xs">
-                  {filteredRemessas.map(item => (
-                    <tr key={item.id} className="hover:bg-slate-50/80">
-                      <td className="py-3 px-3 align-top max-w-[200px]">
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-bold text-slate-900">NF {item.numeroNF}</span>
-                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                            item.foiComNota === 'SIM' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
-                          }`}>
-                            {item.foiComNota === 'SIM' ? 'C/ NF' : 'S/ NF'}
-                          </span>
-                        </div>
-                        <div className="text-slate-500 text-[11px]">Emissão: {formatDateBR(item.dataEmissaoNF)}</div>
-                        <div className="font-semibold text-emerald-700 mt-0.5">
-                          {Number(item.valorTotal || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                        </div>
-                        {item.chaveAcesso && (
-                          <div className="mt-1.5 bg-slate-100 border border-slate-200 rounded p-1 text-[10px] font-mono text-slate-600">
-                            <div className="truncate" title={item.chaveAcesso}>{item.chaveAcesso}</div>
-                            <button
-                              type="button"
-                              onClick={() => copyChaveToClipboard(item.chaveAcesso)}
-                              className="text-emerald-700 font-sans font-bold flex items-center gap-1 mt-0.5 hover:underline"
-                            >
-                              <Copy className="w-3 h-3" /> Copiar Chave
-                            </button>
+                  {filteredRemessas.map(item => {
+                    const pendSemNF = isItemPendingSemNota(item);
+                    return (
+                      <tr key={item.id} className="hover:bg-slate-50/80">
+                        <td className="py-3 px-3 align-top max-w-[200px]">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-bold text-slate-900">
+                              {item.numeroNF && item.numeroNF !== 'S/NF' ? `NF ${item.numeroNF}` : 'S/ NF Física'}
+                            </span>
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                              item.foiComNota === 'SIM' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                            }`}>
+                              {item.foiComNota === 'SIM' ? 'C/ NF' : 'S/ NF'}
+                            </span>
                           </div>
-                        )}
-                      </td>
-
-                      <td className="py-3 px-3 align-top max-w-md">
-                        <div className="font-bold text-slate-800">{item.fornecedor}</div>
-                        {Array.isArray(item.itens) && item.itens.length > 0 ? (
-                          <div className="mt-1.5 space-y-1 bg-slate-50 p-2 rounded-lg border border-slate-200/80">
-                            {item.itens.map((it, idx) => {
-                              const isDiff = Number(it.quantidadeRecebida ?? it.quantidadeNF) !== Number(it.quantidadeNF);
-                              return (
-                                <div key={it.id || idx} className="flex items-center justify-between gap-2 text-[11px] border-b last:border-b-0 border-slate-200/60 pb-1 last:pb-0">
-                                  <span className="font-medium text-slate-700">{it.descricao}</span>
-                                  <div className="flex items-center gap-1 shrink-0 font-mono">
-                                    <span className="px-1.5 py-0.5 bg-white border rounded text-slate-700">
-                                      NF: {it.quantidadeNF} {it.unidade || 'UN'}
-                                    </span>
-                                    {item.statusAlmoxarifado === 'RECEBIDO' && (
-                                      <span className={`px-1.5 py-0.5 rounded font-bold ${
-                                        isDiff ? 'bg-red-100 text-red-700 border border-red-300' : 'bg-emerald-100 text-emerald-800'
-                                      }`}>
-                                        Rec: {it.quantidadeRecebida ?? it.quantidadeNF}
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                              );
-                            })}
+                          <div className="text-slate-500 text-[11px]">Emissão: {formatDateBR(item.dataEmissaoNF)}</div>
+                          <div className="font-semibold text-emerald-700 mt-0.5">
+                            {Number(item.valorTotal || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                           </div>
-                        ) : (
-                          <div className="text-slate-500 mt-1">{item.resumoMercadoria || '-'}</div>
-                        )}
-                      </td>
-
-                      <td className="py-3 px-3 align-top">
-                        <div className="font-medium text-slate-800">{item.setorDestino}</div>
-                        <div className="text-slate-500">Envio: {formatDateBR(item.dataEnvioFazenda)}</div>
-                        <div className="text-slate-500">Portador: {item.portadorMotorista || '-'}</div>
-                      </td>
-
-                      <td className="py-3 px-3 align-top space-y-1.5">
-                        {item.statusAlmoxarifado === 'RECEBIDO' ? (
-                          <div className="text-emerald-700">
-                            <div className="font-bold flex items-center gap-1">
-                              <CheckCircle2 className="w-3.5 h-3.5" /> Conferido
-                            </div>
-                            <div className="text-[11px]">Data: {formatDateBR(item.dataRecebimentoAlmox)}</div>
-                            <div className="text-[11px]">Por: {item.recebidoPorAlmox}</div>
-                            {currentPermissions.canConfirmAlmox && (
+                          {item.chaveAcesso && (
+                            <div className="mt-1.5 bg-slate-100 border border-slate-200 rounded p-1 text-[10px] font-mono text-slate-600">
+                              <div className="truncate" title={item.chaveAcesso}>{item.chaveAcesso}</div>
                               <button
                                 type="button"
-                                onClick={() => openAlmoxModalForItem(item)}
-                                className="mt-1 text-[11px] text-emerald-800 underline font-semibold"
+                                onClick={() => copyChaveToClipboard(item.chaveAcesso)}
+                                className="text-emerald-700 font-sans font-bold flex items-center gap-1 mt-0.5 hover:underline"
                               >
-                                Rever Quantidades
+                                <Copy className="w-3 h-3" /> Copiar Chave
+                              </button>
+                            </div>
+                          )}
+                        </td>
+
+                        <td className="py-3 px-3 align-top max-w-md">
+                          <div className="font-bold text-slate-800">{item.fornecedor}</div>
+                          {Array.isArray(item.itens) && item.itens.length > 0 ? (
+                            <div className="mt-1.5 space-y-1 bg-slate-50 p-2 rounded-lg border border-slate-200/80">
+                              {item.itens.map((it, idx) => {
+                                const isDiff = Number(it.quantidadeRecebida ?? it.quantidadeNF) !== Number(it.quantidadeNF);
+                                return (
+                                  <div key={it.id || idx} className="flex items-center justify-between gap-2 text-[11px] border-b last:border-b-0 border-slate-200/60 pb-1 last:pb-0">
+                                    <span className="font-medium text-slate-700">{it.descricao}</span>
+                                    <div className="flex items-center gap-1 shrink-0 font-mono">
+                                      <span className="px-1.5 py-0.5 bg-white border rounded text-slate-700">
+                                        Qtd: {it.quantidadeNF} {it.unidade || 'UN'}
+                                      </span>
+                                      {item.statusAlmoxarifado === 'RECEBIDO' && (
+                                        <span className={`px-1.5 py-0.5 rounded font-bold ${
+                                          isDiff ? 'bg-red-100 text-red-700 border border-red-300' : 'bg-emerald-100 text-emerald-800'
+                                        }`}>
+                                          Rec: {it.quantidadeRecebida ?? it.quantidadeNF}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="text-slate-500 mt-1">{item.resumoMercadoria || '-'}</div>
+                          )}
+                        </td>
+
+                        <td className="py-3 px-3 align-top">
+                          <div className="font-medium text-slate-800">{item.setorDestino}</div>
+                          <div className="text-slate-500">Envio: {formatDateBR(item.dataEnvioFazenda)}</div>
+                          <div className="text-slate-500">Portador: {item.portadorMotorista || '-'}</div>
+                        </td>
+
+                        <td className="py-3 px-3 align-top space-y-1.5">
+                          {item.statusAlmoxarifado === 'RECEBIDO' ? (
+                            <div className="text-emerald-700">
+                              <div className="font-bold flex items-center gap-1">
+                                <CheckCircle2 className="w-3.5 h-3.5" /> Conferido
+                              </div>
+                              <div className="text-[11px]">Data: {formatDateBR(item.dataRecebimentoAlmox)}</div>
+                              <div className="text-[11px]">Por: {item.recebidoPorAlmox}</div>
+                              {currentPermissions.canConfirmAlmox && (
+                                <button
+                                  type="button"
+                                  onClick={() => openAlmoxModalForItem(item)}
+                                  className="mt-1 text-[11px] text-emerald-800 underline font-semibold"
+                                >
+                                  Rever Quantidades
+                                </button>
+                              )}
+                            </div>
+                          ) : (
+                            <button
+                              disabled={!currentPermissions.canConfirmAlmox}
+                              onClick={() => openAlmoxModalForItem(item)}
+                              className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 ${
+                                currentPermissions.canConfirmAlmox
+                                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                  : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                              }`}
+                            >
+                              <Warehouse className="w-3.5 h-3.5" /> Conferir Itens
+                            </button>
+                          )}
+
+                          {/* PENDÊNCIA COMPRAS: MERCADORIA SEM NF FÍSICA */}
+                          {pendSemNF && (
+                            <div className="pt-1">
+                              <button
+                                disabled={!currentPermissions.canApproveDivergence}
+                                onClick={() => openSemNotaModalForItem(item)}
+                                className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 ${
+                                  currentPermissions.canApproveDivergence
+                                    ? 'bg-amber-600 hover:bg-amber-700 text-white shadow-sm'
+                                    : 'bg-amber-50 text-amber-700 border border-amber-200 cursor-not-allowed'
+                                }`}
+                              >
+                                <AlertTriangle className="w-3.5 h-3.5" />
+                                {currentPermissions.canApproveDivergence ? 'Resolver Sem NF (Compras)' : 'Pendente NF (Compras)'}
+                              </button>
+                            </div>
+                          )}
+
+                          {item.statusSemNotaCompras === 'RESOLVIDO_COMPRAS' && (
+                            <div className="text-[11px] text-emerald-800 font-semibold bg-emerald-50 border border-emerald-200 rounded px-2 py-1">
+                              ✓ Sem NF Resolvido ({item.resolvidoSemNotaPor})
+                            </div>
+                          )}
+
+                          {/* PENDÊNCIA COMPRAS: DIVERGÊNCIA DE QUANTIDADE */}
+                          {item.statusDivergenciaCompras === 'PENDENTE_COMPRAS' && (
+                            <div className="pt-1">
+                              <button
+                                disabled={!currentPermissions.canApproveDivergence}
+                                onClick={() => {
+                                  setComprasConfirmData({
+                                    parecerCompras: item.parecerCompras || '',
+                                    itensRevisados: (item.itens || []).map(i => ({ ...i }))
+                                  });
+                                  setComprasModalItem(item);
+                                }}
+                                className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 ${
+                                  currentPermissions.canApproveDivergence
+                                    ? 'bg-red-600 hover:bg-red-700 text-white shadow-sm'
+                                    : 'bg-red-50 text-red-600 border border-red-200 cursor-not-allowed'
+                                }`}
+                              >
+                                <AlertTriangle className="w-3.5 h-3.5" />
+                                {currentPermissions.canApproveDivergence ? 'Confirmar Qtd (Compras)' : 'Pendência Qtd Compras'}
+                              </button>
+                            </div>
+                          )}
+
+                          {item.statusDivergenciaCompras === 'APROVADA_COMPRAS' && (
+                            <div className="text-[11px] text-purple-700 font-semibold bg-purple-50 border border-purple-200 rounded px-2 py-1">
+                              ✓ Divergência validada ({item.aprovadoComprasPor})
+                            </div>
+                          )}
+                        </td>
+
+                        <td className="py-3 px-3 align-top">
+                          {item.statusRetornoEscritorio === 'RECEBIDO' ? (
+                            <div className="text-blue-700">
+                              <div className="font-bold flex items-center gap-1">
+                                <CheckCircle2 className="w-3.5 h-3.5" /> Retornou
+                              </div>
+                              <div className="text-[11px]">Data: {formatDateBR(item.dataRetornoEscritorio)}</div>
+                              <div className="text-[11px]">Por: {item.recebidoPorEscritorio}</div>
+                            </div>
+                          ) : (
+                            <button
+                              disabled={!currentPermissions.canConfirmOffice}
+                              onClick={() => {
+                                setOfficeConfirmData({
+                                  dataRetornoEscritorio: todayStr,
+                                  recebidoPorEscritorio: loggedUser.name,
+                                  observacoes: item.observacoes || ''
+                                });
+                                setOfficeModalItem(item);
+                              }}
+                              className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 ${
+                                currentPermissions.canConfirmOffice
+                                  ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                                  : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                              }`}
+                            >
+                              <Building2 className="w-3.5 h-3.5" /> Confirmar Escritório
+                            </button>
+                          )}
+                        </td>
+
+                        <td className="py-3 px-3 align-top text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            <button
+                              onClick={() => setHistoryModalItem(item)}
+                              className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-semibold flex items-center gap-1"
+                              title="Ver Histórico de Alterações"
+                            >
+                              <History className="w-3.5 h-3.5" />
+                              <span>{(item.historico || []).length}</span>
+                            </button>
+                            <button
+                              onClick={() => {
+                                setFormData({ ...item, itens: item.itens || [] });
+                                setEditingId(item.id);
+                                setIsFormOpen(true);
+                              }}
+                              className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100"
+                              title="Editar"
+                            >
+                              <Edit3 className="w-4 h-4" />
+                            </button>
+                            {currentPermissions.isAdmin && (
+                              <button
+                                onClick={() => handleDeleteRemessa(item.id)}
+                                className="p-1.5 rounded-lg text-red-500 hover:bg-red-50"
+                                title="Excluir"
+                              >
+                                <Trash2 className="w-4 h-4" />
                               </button>
                             )}
                           </div>
-                        ) : (
-                          <button
-                            disabled={!currentPermissions.canConfirmAlmox}
-                            onClick={() => openAlmoxModalForItem(item)}
-                            className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 ${
-                              currentPermissions.canConfirmAlmox
-                                ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                                : 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                            }`}
-                          >
-                            <Warehouse className="w-3.5 h-3.5" /> Conferir Itens
-                          </button>
-                        )}
-
-                        {item.statusDivergenciaCompras === 'PENDENTE_COMPRAS' && (
-                          <div className="pt-1">
-                            <button
-                              disabled={!currentPermissions.canApproveDivergence}
-                              onClick={() => {
-                                setComprasConfirmData({
-                                  parecerCompras: item.parecerCompras || '',
-                                  itensRevisados: (item.itens || []).map(i => ({ ...i }))
-                                });
-                                setComprasModalItem(item);
-                              }}
-                              className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 ${
-                                currentPermissions.canApproveDivergence
-                                  ? 'bg-red-600 hover:bg-red-700 text-white shadow-sm'
-                                  : 'bg-red-50 text-red-600 border border-red-200 cursor-not-allowed'
-                              }`}
-                            >
-                              <AlertTriangle className="w-3.5 h-3.5" />
-                              {currentPermissions.canApproveDivergence ? 'Confirmar Qtd (Compras)' : 'Pendência Compras'}
-                            </button>
-                          </div>
-                        )}
-
-                        {item.statusDivergenciaCompras === 'APROVADA_COMPRAS' && (
-                          <div className="text-[11px] text-purple-700 font-semibold bg-purple-50 border border-purple-200 rounded px-2 py-1">
-                            ✓ Divergência validada ({item.aprovadoComprasPor})
-                          </div>
-                        )}
-                      </td>
-
-                      <td className="py-3 px-3 align-top">
-                        {item.statusRetornoEscritorio === 'RECEBIDO' ? (
-                          <div className="text-blue-700">
-                            <div className="font-bold flex items-center gap-1">
-                              <CheckCircle2 className="w-3.5 h-3.5" /> Retornou
-                            </div>
-                            <div className="text-[11px]">Data: {formatDateBR(item.dataRetornoEscritorio)}</div>
-                            <div className="text-[11px]">Por: {item.recebidoPorEscritorio}</div>
-                          </div>
-                        ) : (
-                          <button
-                            disabled={!currentPermissions.canConfirmOffice}
-                            onClick={() => {
-                              setOfficeConfirmData({
-                                dataRetornoEscritorio: todayStr,
-                                recebidoPorEscritorio: loggedUser.name,
-                                observacoes: item.observacoes || ''
-                              });
-                              setOfficeModalItem(item);
-                            }}
-                            className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 ${
-                              currentPermissions.canConfirmOffice
-                                ? 'bg-blue-600 hover:bg-blue-700 text-white'
-                                : 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                            }`}
-                          >
-                            <Building2 className="w-3.5 h-3.5" /> Confirmar Escritório
-                          </button>
-                        )}
-                      </td>
-
-                      <td className="py-3 px-3 align-top text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          <button
-                            onClick={() => setHistoryModalItem(item)}
-                            className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-semibold flex items-center gap-1"
-                            title="Ver Histórico de Alterações"
-                          >
-                            <History className="w-3.5 h-3.5" />
-                            <span>{(item.historico || []).length}</span>
-                          </button>
-                          <button
-                            onClick={() => {
-                              setFormData({ ...item, itens: item.itens || [] });
-                              setEditingId(item.id);
-                              setIsFormOpen(true);
-                            }}
-                            className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100"
-                            title="Editar"
-                          >
-                            <Edit3 className="w-4 h-4" />
-                          </button>
-                          {currentPermissions.isAdmin && (
-                            <button
-                              onClick={() => handleDeleteRemessa(item.id)}
-                              className="p-1.5 rounded-lg text-red-500 hover:bg-red-50"
-                              title="Excluir"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -2288,13 +2465,13 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
         )}
       </main>
 
-      {/* MODAL: NOVO DESPACHO / EDIÇÃO (COM CÂMERA NATIVA DIRETA E LOTE ATÉ 20 NOTAS) */}
+      {/* MODAL: NOVO DESPACHO / EDIÇÃO (COM Nº NF OPCIONAL QUANDO SEM NF FÍSICA) */}
       {isFormOpen && (
         <div className="fixed inset-0 z-40 bg-slate-900/60 flex items-start justify-center p-2 pt-3 overflow-y-auto">
           <div className="bg-white rounded-2xl max-w-2xl w-full p-4 shadow-xl mb-20">
             <div className="flex items-center justify-between pb-3 border-b border-slate-200">
               <h2 className="text-sm font-bold text-slate-800">
-                {editingId ? 'Editar Registro de NF' : 'Novo Despacho de Mercadoria (v2.4)'}
+                {editingId ? 'Editar Registro de NF' : 'Novo Despacho de Mercadoria (v2.5)'}
               </h2>
               <button onClick={resetForm} className="p-1 rounded-lg text-slate-400 hover:bg-slate-100">
                 <X className="w-5 h-5" />
@@ -2303,7 +2480,6 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
 
             <div className="my-3 bg-emerald-50/70 border border-emerald-200 rounded-xl p-3">
               <div className="grid grid-cols-2 gap-2">
-                {/* Botão abre DIRETO a câmera nativa original do celular */}
                 <button
                   type="button"
                   onClick={() => nativeCameraInputRef.current?.click()}
@@ -2312,7 +2488,6 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
                 >
                   <Camera className="w-4 h-4" /> Tirar Foto (Câmera)
                 </button>
-                {/* Botão permite selecionar de 1 até 20 fotos/PDFs da galeria */}
                 <button
                   type="button"
                   onClick={() => galleryInputRef.current?.click()}
@@ -2326,7 +2501,6 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
                 Dica: Na Galeria, você pode selecionar até <strong>20 notas de uma só vez</strong> para leitura em fila e confirmação posterior.
               </p>
 
-              {/* Input Galeria com seleção múltipla (até 20) */}
               <input
                 ref={galleryInputRef}
                 type="file"
@@ -2335,7 +2509,6 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
                 onChange={handleFilesSelected}
                 className="hidden"
               />
-              {/* Input Câmera Nativa Direta */}
               <input
                 ref={nativeCameraInputRef}
                 type="file"
@@ -2352,7 +2525,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
               )}
               {lastAiError && (
                 <div className="mt-2 text-[11px] text-red-700 bg-red-50 border border-red-200 rounded-lg p-2">
-                  <strong>Diagnóstico v2.4:</strong> {lastAiError}
+                  <strong>Diagnóstico v2.5:</strong> {lastAiError}
                 </div>
               )}
               {neuralSuggestionBanner && (
@@ -2365,13 +2538,18 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
             <form onSubmit={handleSaveRemessa} className="space-y-3 text-xs">
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
                 <div>
-                  <label className="font-semibold text-slate-600">Nº da NF *</label>
+                  <label className="font-semibold text-slate-600">
+                    {formData.foiComNota === 'NAO' ? 'Nº da NF (Opcional - Sem NF)' : 'Nº da NF *'}
+                  </label>
                   <input
                     type="text"
-                    required
+                    required={formData.foiComNota === 'SIM'}
+                    placeholder={formData.foiComNota === 'NAO' ? 'Sem NF física (opcional)' : 'Ex: 14502'}
                     value={formData.numeroNF}
                     onChange={(e) => setFormData({ ...formData, numeroNF: e.target.value })}
-                    className="w-full mt-1 px-2.5 py-2 border border-slate-300 rounded-lg"
+                    className={`w-full mt-1 px-2.5 py-2 border rounded-lg ${
+                      formData.foiComNota === 'NAO' ? 'border-amber-300 bg-amber-50/40' : 'border-slate-300'
+                    }`}
                   />
                 </div>
                 <div>
@@ -2384,7 +2562,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
                   />
                 </div>
                 <div className="col-span-2 sm:col-span-1">
-                  <label className="font-semibold text-slate-600">Data Emissão NF</label>
+                  <label className="font-semibold text-slate-600">Data Emissão / Envio</label>
                   <input
                     type="date"
                     value={formData.dataEmissaoNF}
@@ -2427,7 +2605,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
                 <div className="flex items-center justify-between">
                   <label className="font-bold text-slate-700 flex items-center gap-1.5">
                     <Package className="w-4 h-4 text-emerald-600" />
-                    Itens Individuais da Nota ({(formData.itens || []).length})
+                    Itens Individuais da Mercadoria ({(formData.itens || []).length})
                   </label>
                   <button
                     type="button"
@@ -2514,13 +2692,26 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
                   <select
                     value={formData.foiComNota}
                     onChange={(e) => setFormData({ ...formData, foiComNota: e.target.value })}
-                    className="w-full mt-1 px-2.5 py-2 border border-slate-300 rounded-lg bg-white font-semibold"
+                    className={`w-full mt-1 px-2.5 py-2 border rounded-lg font-semibold ${
+                      formData.foiComNota === 'NAO'
+                        ? 'bg-amber-50 border-amber-400 text-amber-900'
+                        : 'bg-white border-slate-300 text-slate-800'
+                    }`}
                   >
                     <option value="SIM">SIM - Foi com a NF</option>
                     <option value="NAO">NÃO - Sem NF física</option>
                   </select>
                 </div>
               </div>
+
+              {formData.foiComNota === 'NAO' && (
+                <div className="bg-amber-50 border border-amber-300 text-amber-900 rounded-xl p-2.5 text-[11px] flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>
+                    <strong>Atenção:</strong> Como a mercadoria está indo <strong>Sem NF física</strong>, o Nº da NF não é obrigatório agora e este envio ficará em <strong>Pendências Compras</strong> até ser regularizado.
+                  </span>
+                </div>
+              )}
 
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200">
                 <button
@@ -2563,7 +2754,6 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
               )}
             </div>
 
-            {/* BARRA DE PROGRESSO DA FILA */}
             {batchProgress.active && (
               <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 space-y-1.5">
                 <div className="flex items-center justify-between font-semibold text-emerald-900">
@@ -2582,7 +2772,6 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
               </div>
             )}
 
-            {/* CONFIGURAÇÃO PADRÃO PARA APLICAR A TODAS DO LOTE */}
             <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 grid grid-cols-1 sm:grid-cols-3 gap-2">
               <div>
                 <label className="font-semibold text-slate-600 text-[11px]">Setor Padrão do Lote</label>
@@ -2629,7 +2818,6 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
               </div>
             </div>
 
-            {/* LISTA DE NOTAS DO LOTE PARA CONFERÊNCIA POSTERIOR */}
             <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
               {batchItems.map((bItem, idx) => (
                 <div
@@ -2676,7 +2864,9 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
 
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                     <div>
-                      <label className="text-[10px] text-slate-500 font-semibold">Nº da NF *</label>
+                      <label className="text-[10px] text-slate-500 font-semibold">
+                        {(bItem.foiComNota || batchGlobalConfig.foiComNota) === 'NAO' ? 'Nº NF (Opcional)' : 'Nº da NF *'}
+                      </label>
                       <input
                         type="text"
                         placeholder="Nº NF"
@@ -2727,7 +2917,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
 
             <div className="flex items-center justify-between pt-3 border-t border-slate-200">
               <span className="text-slate-600 font-semibold">
-                {batchItems.filter(i => i.selected && i.numeroNF && i.fornecedor).length} nota(s) pronta(s) para salvar
+                {batchItems.filter(i => i.selected && i.fornecedor && ((i.foiComNota || batchGlobalConfig.foiComNota) === 'NAO' || i.numeroNF)).length} nota(s) pronta(s) para salvar
               </span>
               <div className="flex items-center gap-2">
                 <button
@@ -2748,6 +2938,105 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: PENDÊNCIA COMPRAS — MERCADORIA ENVIADA SEM NF FÍSICA */}
+      {semNotaModalItem && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-start justify-center p-2 pt-6 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-4 shadow-xl space-y-3 mb-16">
+            <div className="flex items-center justify-between border-b pb-2">
+              <h3 className="text-sm font-bold text-amber-800 flex items-center gap-1.5">
+                <AlertTriangle className="w-4 h-4 text-amber-600" /> Pendência Compras: Mercadoria Sem NF Física
+              </h3>
+              <button onClick={() => setSemNotaModalItem(null)}><X className="w-4 h-4 text-slate-400" /></button>
+            </div>
+
+            {/* QUADRO COM TODOS OS DADOS DO ENVIO */}
+            <div className="bg-amber-50/80 border border-amber-200 rounded-xl p-3 text-xs space-y-1.5">
+              <div className="font-bold text-amber-900 uppercase text-[11px] border-b border-amber-200 pb-1 mb-1">
+                Dados do Envio Registrado
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                <div><strong>Fornecedor:</strong> {semNotaModalItem.fornecedor}</div>
+                <div><strong>Valor Estimado:</strong> {Number(semNotaModalItem.valorTotal || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</div>
+                <div><strong>Data do Envio:</strong> {formatDateBR(semNotaModalItem.dataEnvioFazenda)}</div>
+                <div><strong>Setor Destino:</strong> {semNotaModalItem.setorDestino}</div>
+                <div><strong>Motorista / Portador:</strong> {semNotaModalItem.portadorMotorista || '-'}</div>
+                <div><strong>Lançado por:</strong> {semNotaModalItem.lancadoPor || '-'}</div>
+              </div>
+
+              {Array.isArray(semNotaModalItem.itens) && semNotaModalItem.itens.length > 0 ? (
+                <div className="pt-1.5 border-t border-amber-200/80">
+                  <strong className="block mb-1 text-[11px]">Itens Enviados ({semNotaModalItem.itens.length}):</strong>
+                  <div className="space-y-1 max-h-32 overflow-y-auto bg-white p-2 rounded-lg border border-amber-200">
+                    {semNotaModalItem.itens.map((it, idx) => (
+                      <div key={it.id || idx} className="flex items-center justify-between text-[11px]">
+                        <span className="font-medium text-slate-700">{it.descricao}</span>
+                        <span className="font-mono font-bold text-slate-800">{it.quantidadeNF} {it.unidade || 'UN'}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : semNotaModalItem.resumoMercadoria ? (
+                <div className="pt-1 border-t border-amber-200/80">
+                  <strong>Mercadoria:</strong> {semNotaModalItem.resumoMercadoria}
+                </div>
+              ) : null}
+            </div>
+
+            <form onSubmit={handleResolveSemNotaCompras} className="space-y-3 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div>
+                  <label className="font-semibold text-slate-700">Nº da NF Emitida (Se já tiver)</label>
+                  <input
+                    type="text"
+                    placeholder="Ex: 15890 (ou deixe em branco)"
+                    value={semNotaConfirmData.numeroNFRegularizada}
+                    onChange={(e) => setSemNotaConfirmData({ ...semNotaConfirmData, numeroNFRegularizada: e.target.value })}
+                    className="w-full mt-1 px-2.5 py-2 border border-slate-300 rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="font-semibold text-slate-700">Chave de Acesso (Opcional)</label>
+                  <input
+                    type="text"
+                    placeholder="44 dígitos da NF..."
+                    value={semNotaConfirmData.chaveAcessoRegularizada}
+                    onChange={(e) => setSemNotaConfirmData({ ...semNotaConfirmData, chaveAcessoRegularizada: e.target.value })}
+                    className="w-full mt-1 px-2.5 py-2 border border-slate-300 rounded-lg font-mono text-[11px]"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="font-semibold text-slate-700">Observação / Providência do Compras</label>
+                <textarea
+                  rows={2}
+                  placeholder="Ex: Nota fiscal já emitida pelo fornecedor e enviada ao escritório / Remessa bonificada..."
+                  value={semNotaConfirmData.parecerSemNota}
+                  onChange={(e) => setSemNotaConfirmData({ ...semNotaConfirmData, parecerSemNota: e.target.value })}
+                  className="w-full mt-1 p-2 border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t">
+                <button
+                  type="button"
+                  onClick={() => setSemNotaModalItem(null)}
+                  className="px-3 py-2 border rounded-lg font-semibold text-slate-600"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg shadow-sm flex items-center gap-1.5"
+                >
+                  <CheckCircle2 className="w-4 h-4" /> Confirmar que Já Resolveu a Pendência
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
