@@ -43,7 +43,8 @@ import {
   Filter,
   FileSpreadsheet,
   Printer,
-  Layers
+  Layers,
+  Send
 } from 'lucide-react';
 
 // ============================================================================
@@ -202,6 +203,7 @@ export default function App() {
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [almoxModalItem, setAlmoxModalItem] = useState(null);
+  const [envioNotaEscritorioModalItem, setEnvioNotaEscritorioModalItem] = useState(null);
   const [officeModalItem, setOfficeModalItem] = useState(null);
   const [comprasModalItem, setComprasModalItem] = useState(null);
   const [semNotaModalItem, setSemNotaModalItem] = useState(null);
@@ -235,7 +237,7 @@ export default function App() {
   const [statusFilter, setStatusFilter] = useState('TODOS');
   const [showAdvancedSearch, setShowAdvancedSearch] = useState(false);
   const [advFilters, setAdvFilters] = useState({
-    tipoData: 'EMISSAO', // EMISSAO | ENVIO | ALMOX
+    tipoData: 'EMISSAO', // EMISSAO | ENVIO | ALMOX | ENVIO_ESCRITORIO
     dataInicio: '',
     dataFim: '',
     numeroNF: '',
@@ -262,6 +264,10 @@ export default function App() {
     statusAlmoxarifado: 'PENDENTE',
     dataRecebimentoAlmox: '',
     recebidoPorAlmox: '',
+    statusEnvioNotaEscritorio: 'PENDENTE', // PENDENTE | ENVIADO
+    dataEnvioNotaEscritorio: '',
+    enviadoNotaPorAlmox: '',
+    portadorRetornoEscritorio: '',
     statusRetornoEscritorio: 'PENDENTE',
     dataRetornoEscritorio: '',
     recebidoPorEscritorio: '',
@@ -276,7 +282,16 @@ export default function App() {
     dataRecebimentoAlmox: todayStr,
     recebidoPorAlmox: '',
     observacoesAlmox: '',
-    itensConferencia: []
+    itensConferencia: [],
+    jaEnviouNotaEscritorio: false,
+    dataEnvioNotaEscritorio: todayStr,
+    portadorRetornoEscritorio: ''
+  });
+
+  const [envioNotaEscritorioData, setEnvioNotaEscritorioData] = useState({
+    dataEnvioNotaEscritorio: todayStr,
+    enviadoNotaPorAlmox: '',
+    portadorRetornoEscritorio: ''
   });
 
   const [officeConfirmData, setOfficeConfirmData] = useState({
@@ -313,14 +328,12 @@ export default function App() {
     return ROLES_CONFIG[loggedUser.role] || ROLES_CONFIG.compras;
   }, [loggedUser]);
 
-  // Verifica se o registro possui pendência de Sem NF para o Compras
   const isItemPendingSemNota = (r) => {
     if (r.statusSemNotaCompras === 'PENDENTE_COMPRAS') return true;
     if (r.foiComNota === 'NAO' && r.statusSemNotaCompras !== 'RESOLVIDO_COMPRAS') return true;
     return false;
   };
 
-  // Verifica qualquer pendência do setor de Compras (Divergência de Qtd OU Sem NF física)
   const isItemPendingComprasAny = (r) => {
     return r.statusDivergenciaCompras === 'PENDENTE_COMPRAS' || isItemPendingSemNota(r);
   };
@@ -455,7 +468,7 @@ export default function App() {
   };
 
   // ==========================================================================
-  // MOTOR DE EXTRAÇÃO GEMINI IA (USADO TANTO PARA 1 FOTO QUANTO PARA LOTE DE 20)
+  // MOTOR DE EXTRAÇÃO GEMINI IA
   // ==========================================================================
   const extractInvoiceFromDataUrl = async (rawDataUrl, mimeType, onStatusUpdate) => {
     const optimizedUrl = await compressImageDataUrl(rawDataUrl);
@@ -649,7 +662,6 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
     };
   };
 
-  // Leitura de 1 única foto (Câmera Nativa ou 1 arquivo da Galeria)
   const processSingleFileWithGemini = async (file) => {
     setIsScanning(true);
     setLastAiError('');
@@ -832,6 +844,10 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
           statusAlmoxarifado: 'PENDENTE',
           dataRecebimentoAlmox: '',
           recebidoPorAlmox: '',
+          statusEnvioNotaEscritorio: 'PENDENTE',
+          dataEnvioNotaEscritorio: '',
+          enviadoNotaPorAlmox: '',
+          portadorRetornoEscritorio: '',
           statusRetornoEscritorio: 'PENDENTE',
           dataRetornoEscritorio: '',
           recebidoPorEscritorio: '',
@@ -855,7 +871,6 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
     }
   };
 
-  // Funções para manipular itens dentro do formulário individual
   const handleAddFormItem = () => {
     setFormData(prev => ({
       ...prev,
@@ -897,7 +912,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
   };
 
   // ==========================================================================
-  // SALVAR DESPACHO (PERMITE SALVAR SEM Nº DA NF QUANDO "NÃO - SEM NF FÍSICA")
+  // SALVAR DESPACHO
   // ==========================================================================
   const handleSaveRemessa = async (e) => {
     e.preventDefault();
@@ -922,7 +937,6 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
 
       const numeroNFFinal = (formData.numeroNF || '').trim() || (isSemNF ? 'S/NF' : '');
 
-      // Define o status da pendência Sem NF para o setor de Compras
       let nextStatusSemNota = 'NENHUMA';
       if (isSemNF) {
         nextStatusSemNota = formData.statusSemNotaCompras === 'RESOLVIDO_COMPRAS'
@@ -1051,6 +1065,10 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
       statusAlmoxarifado: 'PENDENTE',
       dataRecebimentoAlmox: '',
       recebidoPorAlmox: '',
+      statusEnvioNotaEscritorio: 'PENDENTE',
+      dataEnvioNotaEscritorio: '',
+      enviadoNotaPorAlmox: '',
+      portadorRetornoEscritorio: '',
       statusRetornoEscritorio: 'PENDENTE',
       dataRetornoEscritorio: '',
       recebidoPorEscritorio: '',
@@ -1117,6 +1135,11 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
         ? `DIVERGÊNCIA DE QUANTIDADE: ` + alteracoes.map(a => `${a.descricao} (NF: ${a.quantidadeNF} ${a.unidade || 'UN'} ➔ Recebido: ${a.quantidadeRecebida} ${a.unidade || 'UN'})`).join('; ')
         : `Todos os ${itensFinais.length} item(ns) conferidos sem divergência.`;
 
+      const enviouDeVoltaAgora = Boolean(almoxConfirmData.jaEnviouNotaEscritorio);
+      const infoEnvioNota = enviouDeVoltaAgora
+        ? ` | NF física despachada de volta p/ Escritório em ${formatDateBR(almoxConfirmData.dataEnvioNotaEscritorio || todayStr)}${almoxConfirmData.portadorRetornoEscritorio ? ` (Portador: ${almoxConfirmData.portadorRetornoEscritorio})` : ''}.`
+        : '';
+
       const novoHistorico = [
         ...(almoxModalItem.historico || []),
         {
@@ -1125,11 +1148,11 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
           usuario: almoxConfirmData.recebidoPorAlmox || loggedUser?.name || 'Almoxarife',
           perfil: ROLES_CONFIG[loggedUser?.role]?.label || 'Almoxarifado',
           acao: temDivergencia ? 'Recebimento Almoxarifado COM ALTERAÇÃO DE QTD' : 'Recebimento no Almoxarifado OK',
-          detalhes: `${detalhesAlteracao}${almoxConfirmData.observacoesAlmox ? ` | Obs: ${almoxConfirmData.observacoesAlmox}` : ''}`
+          detalhes: `${detalhesAlteracao}${almoxConfirmData.observacoesAlmox ? ` | Obs: ${almoxConfirmData.observacoesAlmox}` : ''}${infoEnvioNota}`
         }
       ];
 
-      await updateDoc(docRef, {
+      const updatePayload = {
         statusAlmoxarifado: 'RECEBIDO',
         dataRecebimentoAlmox: almoxConfirmData.dataRecebimentoAlmox,
         recebidoPorAlmox: almoxConfirmData.recebidoPorAlmox || loggedUser?.name || 'Almoxarife',
@@ -1138,7 +1161,16 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
         observacoes: almoxConfirmData.observacoesAlmox || almoxModalItem.observacoes || '',
         historico: novoHistorico,
         updatedAt: Date.now()
-      });
+      };
+
+      if (enviouDeVoltaAgora) {
+        updatePayload.statusEnvioNotaEscritorio = 'ENVIADO';
+        updatePayload.dataEnvioNotaEscritorio = almoxConfirmData.dataEnvioNotaEscritorio || todayStr;
+        updatePayload.enviadoNotaPorAlmox = almoxConfirmData.recebidoPorAlmox || loggedUser?.name || 'Almoxarife';
+        updatePayload.portadorRetornoEscritorio = almoxConfirmData.portadorRetornoEscritorio || '';
+      }
+
+      await updateDoc(docRef, updatePayload);
 
       setAlmoxModalItem(null);
       if (temDivergencia) {
@@ -1149,6 +1181,53 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
     } catch (err) {
       console.error(err);
       showToast('Erro ao confirmar Almoxarifado.', 'error');
+    }
+  };
+
+  // ==========================================================================
+  // REGISTRO RÁPIDO PELO ALMOXARIFADO: DATA DE ENVIO DA NF FÍSICA DE VOLTA AO ESCRITÓRIO
+  // ==========================================================================
+  const openEnvioNotaEscritorioModal = (item) => {
+    setEnvioNotaEscritorioData({
+      dataEnvioNotaEscritorio: item.dataEnvioNotaEscritorio || todayStr,
+      enviadoNotaPorAlmox: item.enviadoNotaPorAlmox || loggedUser?.name || 'Almoxarife',
+      portadorRetornoEscritorio: item.portadorRetornoEscritorio || item.portadorMotorista || ''
+    });
+    setEnvioNotaEscritorioModalItem(item);
+  };
+
+  const handleConfirmEnvioNotaEscritorio = async (e) => {
+    e.preventDefault();
+    if (!envioNotaEscritorioModalItem) return;
+
+    try {
+      const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'remessas_nf', envioNotaEscritorioModalItem.id);
+      const novoHistorico = [
+        ...(envioNotaEscritorioModalItem.historico || []),
+        {
+          id: 'h_' + Date.now(),
+          dataHora: new Date().toISOString(),
+          usuario: envioNotaEscritorioData.enviadoNotaPorAlmox || loggedUser?.name || 'Almoxarife',
+          perfil: ROLES_CONFIG[loggedUser?.role]?.label || 'Almoxarifado',
+          acao: 'NF Física Enviada de Volta para o Escritório',
+          detalhes: `Data de envio da NF física: ${formatDateBR(envioNotaEscritorioData.dataEnvioNotaEscritorio)} | Enviado por: ${envioNotaEscritorioData.enviadoNotaPorAlmox || loggedUser?.name}${envioNotaEscritorioData.portadorRetornoEscritorio ? ` | Portador/Malote: ${envioNotaEscritorioData.portadorRetornoEscritorio}` : ''}.`
+        }
+      ];
+
+      await updateDoc(docRef, {
+        statusEnvioNotaEscritorio: 'ENVIADO',
+        dataEnvioNotaEscritorio: envioNotaEscritorioData.dataEnvioNotaEscritorio || todayStr,
+        enviadoNotaPorAlmox: envioNotaEscritorioData.enviadoNotaPorAlmox || loggedUser?.name || 'Almoxarife',
+        portadorRetornoEscritorio: envioNotaEscritorioData.portadorRetornoEscritorio || '',
+        historico: novoHistorico,
+        updatedAt: Date.now()
+      });
+
+      setEnvioNotaEscritorioModalItem(null);
+      showToast('Envio da NF física de volta para o Escritório registrado!');
+    } catch (err) {
+      console.error(err);
+      showToast('Erro ao registrar envio da NF física.', 'error');
     }
   };
 
@@ -1212,8 +1291,8 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
           dataHora: new Date().toISOString(),
           usuario: officeConfirmData.recebidoPorEscritorio || loggedUser?.name || 'Escritório',
           perfil: ROLES_CONFIG[loggedUser?.role]?.label || 'Escritório',
-          acao: 'Retorno da NF Física ao Escritório',
-          detalhes: `Conferido por ${officeConfirmData.recebidoPorEscritorio || loggedUser?.name} em ${formatDateBR(officeConfirmData.dataRetornoEscritorio)}.`
+          acao: 'Retorno da NF Física Confirmado no Escritório',
+          detalhes: `Recebimento da NF física conferido por ${officeConfirmData.recebidoPorEscritorio || loggedUser?.name} em ${formatDateBR(officeConfirmData.dataRetornoEscritorio)}.`
         }
       ];
 
@@ -1313,7 +1392,8 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
           (r.chaveAcesso || '').toLowerCase().includes(term) ||
           (r.resumoMercadoria || '').toLowerCase().includes(term) ||
           itensStr.toLowerCase().includes(term) ||
-          (r.portadorMotorista || '').toLowerCase().includes(term);
+          (r.portadorMotorista || '').toLowerCase().includes(term) ||
+          (r.portadorRetornoEscritorio || '').toLowerCase().includes(term);
         if (!matchesQuick) return false;
       }
 
@@ -1336,6 +1416,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
         const targetDate = 
           advFilters.tipoData === 'ENVIO' ? r.dataEnvioFazenda :
           advFilters.tipoData === 'ALMOX' ? r.dataRecebimentoAlmox :
+          advFilters.tipoData === 'ENVIO_ESCRITORIO' ? r.dataEnvioNotaEscritorio :
           r.dataEmissaoNF;
 
         if (!targetDate) return false;
@@ -1396,8 +1477,8 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
       'Chave de Acesso (44 digitos)',
       'Itens (Qtd NF vs Qtd Recebida)',
       'Setor Destino',
-      'Data Envio Fazenda',
-      'Motorista / Portador',
+      'Data Envio p/ Fazenda',
+      'Motorista / Portador Ida',
       'Foi com Nota',
       'Status Sem NF (Compras)',
       'Status Almoxarifado',
@@ -1405,8 +1486,10 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
       'Recebido Por Almox.',
       'Status Divergencia Qtd Compras',
       'Parecer Compras',
-      'Status Retorno Escritorio',
-      'Data Retorno Escritorio',
+      'Data Envio NF Fisica p/ Escritorio (Almox.)',
+      'Portador Retorno NF Fisica',
+      'Status Recebimento Escritorio',
+      'Data Recebimento Escritorio',
       'Conferido Escritorio Por'
     ];
 
@@ -1438,6 +1521,8 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
         escapeCsv(r.recebidoPorAlmox),
         escapeCsv(r.statusDivergenciaCompras || 'NENHUMA'),
         escapeCsv(r.parecerCompras || r.parecerSemNotaCompras || ''),
+        escapeCsv(formatDateBR(r.dataEnvioNotaEscritorio)),
+        escapeCsv(r.portadorRetornoEscritorio || ''),
         escapeCsv(r.statusRetornoEscritorio),
         escapeCsv(formatDateBR(r.dataRetornoEscritorio)),
         escapeCsv(r.recebidoPorEscritorio)
@@ -1503,8 +1588,9 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
             ${isItemPendingSemNota(r) ? '<div style="color:#b45309;font-weight:bold;margin-top:2px;">⚠ Pendente NF (Compras)</div>' : ''}
           </td>
           <td>
-            <strong>${r.statusRetornoEscritorio}</strong><br/>
-            ${r.statusRetornoEscritorio === 'RECEBIDO' ? `${formatDateBR(r.dataRetornoEscritorio)} (${r.recebidoPorEscritorio})` : 'Pendente'}
+            ${r.dataEnvioNotaEscritorio ? `<div style="font-size:10px;color:#0369a1;margin-bottom:3px;"><strong>Enviada p/ Escritório:</strong> ${formatDateBR(r.dataEnvioNotaEscritorio)}${r.portadorRetornoEscritorio ? ` (${r.portadorRetornoEscritorio})` : ''}</div>` : ''}
+            <strong> Escritório: ${r.statusRetornoEscritorio}</strong><br/>
+            ${r.statusRetornoEscritorio === 'RECEBIDO' ? `${formatDateBR(r.dataRetornoEscritorio)} (${r.recebidoPorEscritorio})` : 'Aguardando chegada'}
           </td>
         </tr>
       `;
@@ -1551,11 +1637,11 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
           <thead>
             <tr>
               <th style="width:12%;">NF / Valor</th>
-              <th style="width:20%;">Fornecedor / Chave</th>
-              <th style="width:28%;">Itens Individuais (NF vs Recebido)</th>
+              <th style="width:19%;">Fornecedor / Chave</th>
+              <th style="width:27%;">Itens Individuais (NF vs Recebido)</th>
               <th style="width:14%;">Setor / Envio</th>
               <th style="width:13%;">1. Almoxarifado / Compras</th>
-              <th style="width:13%;">2. Escritório</th>
+              <th style="width:15%;">2. Devolução NF / Escritório</th>
             </tr>
           </thead>
           <tbody>
@@ -1589,10 +1675,13 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
         }];
 
     setAlmoxConfirmData({
-      dataRecebimentoAlmox: todayStr,
-      recebidoPorAlmox: loggedUser.name,
+      dataRecebimentoAlmox: item.dataRecebimentoAlmox || todayStr,
+      recebidoPorAlmox: item.recebidoPorAlmox || loggedUser.name,
       observacoesAlmox: item.observacoes || '',
-      itensConferencia: baseItens
+      itensConferencia: baseItens,
+      jaEnviouNotaEscritorio: item.statusEnvioNotaEscritorio === 'ENVIADO',
+      dataEnvioNotaEscritorio: item.dataEnvioNotaEscritorio || todayStr,
+      portadorRetornoEscritorio: item.portadorRetornoEscritorio || ''
     });
     setAlmoxModalItem(item);
   };
@@ -1606,7 +1695,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
               <FileText className="w-6 h-6" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-slate-800 leading-tight">Controle de NFs v2.5</h1>
+              <h1 className="text-lg font-bold text-slate-800 leading-tight">Controle de NFs v2.6</h1>
               <p className="text-xs text-slate-500">Selecione o seu perfil para entrar</p>
             </div>
           </div>
@@ -1688,7 +1777,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
             </button>
             <div className="truncate">
               <div className="flex items-center gap-1.5">
-                <span className="font-bold text-sm text-slate-800 truncate">Controle NFs <span className="text-[10px] text-emerald-600 font-mono">v2.5</span></span>
+                <span className="font-bold text-sm text-slate-800 truncate">Controle NFs <span className="text-[10px] text-emerald-600 font-mono">v2.6</span></span>
                 <span className="px-2 py-0.5 text-[11px] font-semibold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 truncate">
                   {loggedUser.name}
                 </span>
@@ -1956,6 +2045,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
                   <option value="EMISSAO">Data de Emissão da NF</option>
                   <option value="ENVIO">Data de Envio p/ Fazenda</option>
                   <option value="ALMOX">Data de Recebimento Almoxarifado</option>
+                  <option value="ENVIO_ESCRITORIO">Data Envio NF Física p/ Escritório</option>
                 </select>
               </div>
 
@@ -1994,10 +2084,11 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
           </div>
         ) : (
           <>
-            {/* VISÃO MOBILE (CARDS COM ITENS INDIVIDUAIS, CHAVE E PENDÊNCIA SEM NF) */}
+            {/* VISÃO MOBILE (CARDS COM ITENS INDIVIDUAIS, CHAVE, PENDÊNCIA E DEVOLUÇÃO NF FÍSICA) */}
             <div className="grid grid-cols-1 gap-2.5 md:hidden">
               {filteredRemessas.map(item => {
                 const pendSemNF = isItemPendingSemNota(item);
+                const notaEnviadaEscritorio = Boolean(item.dataEnvioNotaEscritorio);
                 return (
                   <div key={item.id} className="bg-white rounded-xl border border-slate-200 p-3 shadow-sm space-y-2">
                     <div className="flex items-start justify-between gap-2">
@@ -2194,6 +2285,41 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
                       )}
                     </div>
 
+                    {/* LINHA RÁPIDA ALMOXARIFADO: ENVIO DA NF FÍSICA DE VOLTA PARA O ESCRITÓRIO */}
+                    {item.statusAlmoxarifado === 'RECEBIDO' && (
+                      <div className="pt-1">
+                        {notaEnviadaEscritorio ? (
+                          <div
+                            onClick={() => currentPermissions.canConfirmAlmox && openEnvioNotaEscritorioModal(item)}
+                            className={`px-2.5 py-1.5 rounded-lg border text-[11px] flex items-center justify-between ${
+                              item.statusRetornoEscritorio === 'RECEBIDO'
+                                ? 'bg-slate-50 border-slate-200 text-slate-600'
+                                : 'bg-sky-50 border-sky-200 text-sky-900'
+                            } ${currentPermissions.canConfirmAlmox ? 'cursor-pointer' : ''}`}
+                          >
+                            <span className="flex items-center gap-1.5 font-semibold">
+                              <Send className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+                              NF Física enviada p/ Escritório em {formatDateBR(item.dataEnvioNotaEscritorio)}
+                              {item.portadorRetornoEscritorio ? ` (${item.portadorRetornoEscritorio})` : ''}
+                            </span>
+                            {currentPermissions.canConfirmAlmox && (
+                              <span className="text-[10px] underline text-sky-700 ml-1 shrink-0">Alterar</span>
+                            )}
+                          </div>
+                        ) : (
+                          item.statusRetornoEscritorio !== 'RECEBIDO' && currentPermissions.canConfirmAlmox && (
+                            <button
+                              type="button"
+                              onClick={() => openEnvioNotaEscritorioModal(item)}
+                              className="w-full py-1.5 px-2.5 rounded-lg bg-sky-600 hover:bg-sky-700 text-white font-semibold text-xs flex items-center justify-center gap-1.5 shadow-sm"
+                            >
+                              <Send className="w-3.5 h-3.5" /> Enviar NF Física de Volta p/ Escritório
+                            </button>
+                          )
+                        )}
+                      </div>
+                    )}
+
                     <div className="flex items-center justify-between pt-1 border-t border-slate-100 text-xs">
                       <button
                         type="button"
@@ -2222,7 +2348,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
               })}
             </div>
 
-            {/* VISÃO DESKTOP (TABELA COMPLETA COM ITENS, CHAVE E PENDÊNCIAS COMPRAS) */}
+            {/* VISÃO DESKTOP (TABELA COMPLETA COM ITENS, CHAVE, PENDÊNCIAS E DEVOLUÇÃO NF FÍSICA) */}
             <div className="hidden md:block bg-white rounded-2xl border border-slate-200 shadow-sm overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
@@ -2231,13 +2357,14 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
                     <th className="py-3 px-3">Fornecedor & Itens Individuais</th>
                     <th className="py-3 px-3">Envio / Destino</th>
                     <th className="py-3 px-3">1. Conferência Almox. & Compras</th>
-                    <th className="py-3 px-3">2. Retorno Escritório</th>
+                    <th className="py-3 px-3">2. Devolução NF Física & Escritório</th>
                     <th className="py-3 px-3 text-right">Histórico / Ações</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 text-xs">
                   {filteredRemessas.map(item => {
                     const pendSemNF = isItemPendingSemNota(item);
+                    const notaEnviadaEscritorio = Boolean(item.dataEnvioNotaEscritorio);
                     return (
                       <tr key={item.id} className="hover:bg-slate-50/80">
                         <td className="py-3 px-3 align-top max-w-[200px]">
@@ -2392,11 +2519,43 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
                           )}
                         </td>
 
-                        <td className="py-3 px-3 align-top">
+                        {/* COLUNA 2: ENVIO DA NF FÍSICA DE VOLTA (ALMOX) + CONFIRMAÇÃO FINAL DO ESCRITÓRIO */}
+                        <td className="py-3 px-3 align-top space-y-1.5">
+                          {notaEnviadaEscritorio ? (
+                            <div className="bg-sky-50 border border-sky-200 rounded-lg p-1.5 text-[11px] text-sky-900">
+                              <div className="font-bold flex items-center gap-1 text-sky-800">
+                                <Send className="w-3 h-3" /> NF Enviada p/ Escritório
+                              </div>
+                              <div>Data: <strong>{formatDateBR(item.dataEnvioNotaEscritorio)}</strong></div>
+                              {item.portadorRetornoEscritorio && (
+                                <div>Portador: {item.portadorRetornoEscritorio}</div>
+                              )}
+                              {currentPermissions.canConfirmAlmox && item.statusRetornoEscritorio !== 'RECEBIDO' && (
+                                <button
+                                  type="button"
+                                  onClick={() => openEnvioNotaEscritorioModal(item)}
+                                  className="text-[10px] underline text-sky-700 font-semibold mt-0.5"
+                                >
+                                  Alterar data envio
+                                </button>
+                              )}
+                            </div>
+                          ) : (
+                            item.statusAlmoxarifado === 'RECEBIDO' && item.statusRetornoEscritorio !== 'RECEBIDO' && currentPermissions.canConfirmAlmox && (
+                              <button
+                                type="button"
+                                onClick={() => openEnvioNotaEscritorioModal(item)}
+                                className="px-2.5 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-[11px] font-semibold flex items-center gap-1 shadow-sm"
+                              >
+                                <Send className="w-3 h-3" /> Enviar NF Física p/ Escritório
+                              </button>
+                            )
+                          )}
+
                           {item.statusRetornoEscritorio === 'RECEBIDO' ? (
                             <div className="text-blue-700">
                               <div className="font-bold flex items-center gap-1">
-                                <CheckCircle2 className="w-3.5 h-3.5" /> Retornou
+                                <CheckCircle2 className="w-3.5 h-3.5" /> Recebida no Escritório
                               </div>
                               <div className="text-[11px]">Data: {formatDateBR(item.dataRetornoEscritorio)}</div>
                               <div className="text-[11px]">Por: {item.recebidoPorEscritorio}</div>
@@ -2418,7 +2577,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
                                   : 'bg-slate-100 text-slate-400 cursor-not-allowed'
                               }`}
                             >
-                              <Building2 className="w-3.5 h-3.5" /> Confirmar Escritório
+                              <Building2 className="w-3.5 h-3.5" /> Confirmar no Escritório
                             </button>
                           )}
                         </td>
@@ -2465,13 +2624,13 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
         )}
       </main>
 
-      {/* MODAL: NOVO DESPACHO / EDIÇÃO (COM Nº NF OPCIONAL QUANDO SEM NF FÍSICA) */}
+      {/* MODAL: NOVO DESPACHO / EDIÇÃO */}
       {isFormOpen && (
         <div className="fixed inset-0 z-40 bg-slate-900/60 flex items-start justify-center p-2 pt-3 overflow-y-auto">
           <div className="bg-white rounded-2xl max-w-2xl w-full p-4 shadow-xl mb-20">
             <div className="flex items-center justify-between pb-3 border-b border-slate-200">
               <h2 className="text-sm font-bold text-slate-800">
-                {editingId ? 'Editar Registro de NF' : 'Novo Despacho de Mercadoria (v2.5)'}
+                {editingId ? 'Editar Registro de NF' : 'Novo Despacho de Mercadoria (v2.6)'}
               </h2>
               <button onClick={resetForm} className="p-1 rounded-lg text-slate-400 hover:bg-slate-100">
                 <X className="w-5 h-5" />
@@ -2525,7 +2684,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
               )}
               {lastAiError && (
                 <div className="mt-2 text-[11px] text-red-700 bg-red-50 border border-red-200 rounded-lg p-2">
-                  <strong>Diagnóstico v2.5:</strong> {lastAiError}
+                  <strong>Diagnóstico v2.6:</strong> {lastAiError}
                 </div>
               )}
               {neuralSuggestionBanner && (
@@ -2942,6 +3101,78 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
         </div>
       )}
 
+      {/* MODAL SIMPLES E RÁPIDO DO ALMOXARIFADO: ENVIAR NF FÍSICA DE VOLTA PARA O ESCRITÓRIO */}
+      {envioNotaEscritorioModalItem && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-3">
+          <div className="bg-white rounded-2xl max-w-md w-full p-4 shadow-xl space-y-3">
+            <div className="flex items-center justify-between border-b pb-2">
+              <h3 className="text-sm font-bold text-sky-800 flex items-center gap-1.5">
+                <Send className="w-4 h-4 text-sky-600" /> Enviar NF Física de Volta p/ Escritório
+              </h3>
+              <button onClick={() => setEnvioNotaEscritorioModalItem(null)}>
+                <X className="w-4 h-4 text-slate-400" />
+              </button>
+            </div>
+
+            <div className="bg-sky-50 border border-sky-200 rounded-xl p-2.5 text-xs text-slate-700">
+              <div><strong>NF:</strong> {envioNotaEscritorioModalItem.numeroNF}</div>
+              <div><strong>Fornecedor:</strong> {envioNotaEscritorioModalItem.fornecedor}</div>
+            </div>
+
+            <form onSubmit={handleConfirmEnvioNotaEscritorio} className="space-y-3 text-xs">
+              <div>
+                <label className="font-semibold text-slate-700">Data de Envio da NF Física p/ Escritório *</label>
+                <input
+                  type="date"
+                  required
+                  value={envioNotaEscritorioData.dataEnvioNotaEscritorio}
+                  onChange={(e) => setEnvioNotaEscritorioData({ ...envioNotaEscritorioData, dataEnvioNotaEscritorio: e.target.value })}
+                  className="w-full mt-1 px-3 py-2 border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div>
+                <label className="font-semibold text-slate-700">Portador / Motorista que está levando (Opcional)</label>
+                <input
+                  type="text"
+                  placeholder="Ex: Motorista João, Malote..."
+                  value={envioNotaEscritorioData.portadorRetornoEscritorio}
+                  onChange={(e) => setEnvioNotaEscritorioData({ ...envioNotaEscritorioData, portadorRetornoEscritorio: e.target.value })}
+                  className="w-full mt-1 px-3 py-2 border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div>
+                <label className="font-semibold text-slate-700">Despachado pelo Almoxarife *</label>
+                <input
+                  type="text"
+                  required
+                  value={envioNotaEscritorioData.enviadoNotaPorAlmox}
+                  onChange={(e) => setEnvioNotaEscritorioData({ ...envioNotaEscritorioData, enviadoNotaPorAlmox: e.target.value })}
+                  className="w-full mt-1 px-3 py-2 border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t">
+                <button
+                  type="button"
+                  onClick={() => setEnvioNotaEscritorioModalItem(null)}
+                  className="px-3 py-2 border rounded-lg font-semibold text-slate-600"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white font-bold rounded-lg shadow-sm flex items-center gap-1.5"
+                >
+                  <Send className="w-3.5 h-3.5" /> Confirmar Envio da NF Física
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* MODAL: PENDÊNCIA COMPRAS — MERCADORIA ENVIADA SEM NF FÍSICA */}
       {semNotaModalItem && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-start justify-center p-2 pt-6 overflow-y-auto">
@@ -2953,7 +3184,6 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
               <button onClick={() => setSemNotaModalItem(null)}><X className="w-4 h-4 text-slate-400" /></button>
             </div>
 
-            {/* QUADRO COM TODOS OS DADOS DO ENVIO */}
             <div className="bg-amber-50/80 border border-amber-200 rounded-xl p-3 text-xs space-y-1.5">
               <div className="font-bold text-amber-900 uppercase text-[11px] border-b border-amber-200 pb-1 mb-1">
                 Dados do Envio Registrado
@@ -3041,7 +3271,7 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
         </div>
       )}
 
-      {/* MODAL: CONFERÊNCIA DE ITENS NO ALMOXARIFADO COM BOTÕES + E - */}
+      {/* MODAL: CONFERÊNCIA DE ITENS NO ALMOXARIFADO COM BOTÕES + E - E OPÇÃO DE ENVIO DA NF FÍSICA */}
       {almoxModalItem && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-start justify-center p-2 pt-6 overflow-y-auto">
           <div className="bg-white rounded-2xl max-w-lg w-full p-4 shadow-xl space-y-3 mb-16">
@@ -3152,6 +3382,43 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
                   onChange={(e) => setAlmoxConfirmData({ ...almoxConfirmData, observacoesAlmox: e.target.value })}
                   className="w-full mt-1 px-3 py-2 border border-slate-300 rounded-lg"
                 />
+              </div>
+
+              {/* OPÇÃO RÁPIDA PARA JÁ MARCAR O ENVIO DA NF FÍSICA DE VOLTA AO ESCRITÓRIO */}
+              <div className="bg-sky-50 border border-sky-200 rounded-xl p-2.5 space-y-2">
+                <label className="flex items-center gap-2 font-bold text-sky-900 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={almoxConfirmData.jaEnviouNotaEscritorio}
+                    onChange={(e) => setAlmoxConfirmData({ ...almoxConfirmData, jaEnviouNotaEscritorio: e.target.checked })}
+                    className="w-4 h-4 accent-sky-600 rounded"
+                  />
+                  <span>Já estou enviando a NF física de volta para o Escritório</span>
+                </label>
+
+                {almoxConfirmData.jaEnviouNotaEscritorio && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                    <div>
+                      <label className="text-[11px] font-semibold text-sky-800">Data de Envio da NF Física</label>
+                      <input
+                        type="date"
+                        value={almoxConfirmData.dataEnvioNotaEscritorio}
+                        onChange={(e) => setAlmoxConfirmData({ ...almoxConfirmData, dataEnvioNotaEscritorio: e.target.value })}
+                        className="w-full mt-0.5 px-2.5 py-1.5 border border-sky-300 rounded-lg bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-semibold text-sky-800">Portador / Motorista (Opcional)</label>
+                      <input
+                        type="text"
+                        placeholder="Quem está levando a NF..."
+                        value={almoxConfirmData.portadorRetornoEscritorio}
+                        onChange={(e) => setAlmoxConfirmData({ ...almoxConfirmData, portadorRetornoEscritorio: e.target.value })}
+                        className="w-full mt-0.5 px-2.5 py-1.5 border border-sky-300 rounded-lg bg-white"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="flex justify-end gap-2 pt-2">
@@ -3284,9 +3551,15 @@ Retorne APENAS um objeto JSON válido (sem blocos markdown) seguindo exatamente 
             <p className="text-xs text-slate-600">
               NF <strong>{officeModalItem.numeroNF}</strong> • {officeModalItem.fornecedor}
             </p>
+            {officeModalItem.dataEnvioNotaEscritorio && (
+              <div className="bg-sky-50 border border-sky-200 rounded-lg p-2 text-[11px] text-sky-900">
+                Despachada pelo Almoxarifado em <strong>{formatDateBR(officeModalItem.dataEnvioNotaEscritorio)}</strong>
+                {officeModalItem.portadorRetornoEscritorio ? ` com ${officeModalItem.portadorRetornoEscritorio}` : ''}.
+              </div>
+            )}
             <form onSubmit={handleConfirmOffice} className="space-y-3 text-xs">
               <div>
-                <label className="font-semibold text-slate-700">Data de Retorno ao Escritório *</label>
+                <label className="font-semibold text-slate-700">Data de Recebimento no Escritório *</label>
                 <input
                   type="date"
                   required
